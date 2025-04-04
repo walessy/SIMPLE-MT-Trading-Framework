@@ -1,0 +1,27 @@
+# Compiled MetaTrader files
+*.ex4
+*.ex5
+
+# Backtest results
+*.htm
+*.html
+*.gif
+*.png
+*.jpg
+*.jpeg
+*.tester*
+
+# Log files
+*.log
+
+# MetaTrader data
+**/MQL**/Files/**
+**/MQL**/Logs/**
+**/profiles/**
+**/tester/**
+**/history/**
+terminal.ini
+origin.ini
+
+# Broker installers
+BrokerPackages/*.exe
