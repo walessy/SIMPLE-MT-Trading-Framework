@@ -6,6 +6,7 @@ This guide covers the Docker-based workflow for advanced users of the MT Trading
 
 Before getting started, ensure you have:
 
+- MetaTrader 4 and/or MetaTrader 5 installed on your Windows computer
 - Docker Desktop installed and running
 - Git installed
 - PowerShell (Windows) or Terminal (macOS/Linux)
@@ -13,22 +14,32 @@ Before getting started, ensure you have:
 
 ## Advanced Setup
 
-### 1. Run the Easy Setup with Advanced Mode
+### 1. Install MetaTrader
+
+Before running the setup script:
+
+1. Download and install MetaTrader 4 and/or MetaTrader 5 using the standard installation process
+2. Complete the initial setup of MetaTrader
+3. Make sure you can open the MetaTrader terminal normally
+
+### 2. Run the Easy Setup with Advanced Mode
 
 1. Right-click on `Easy-Setup.ps1` and select "Run with PowerShell (Admin)"
 2. Enter your strategy name when prompted
 3. Select "Advanced" as your user level
 4. Choose which platforms you want (MT4, MT5, or both)
-5. Confirm your choices
+5. Enter broker names when prompted
+6. Confirm your choices
 
 The setup will:
+- Locate your existing MetaTrader installations
+- Create containerized copies that run in portable mode
 - Create your framework structure
-- Install MetaTrader terminals
 - Configure Docker environment
 - Create desktop shortcuts
 - Add sample strategy files
 
-### 2. Understanding the Docker Environment
+### 3. Understanding the Docker Environment
 
 The framework uses Docker to provide a consistent build environment:
 
@@ -75,7 +86,7 @@ The build process:
 
 ### 3. Sync with MetaTrader
 
-After building, sync the compiled files to MetaTrader:
+After building, sync the compiled files to the containerized MetaTrader terminals:
 
 1. Open the dashboard (`MT-Dashboard.ps1`)
 2. Select your environment
@@ -90,10 +101,11 @@ For continuous development, use watch mode:
 
 ### 4. Test Your Strategy
 
-1. In MetaTrader, press Ctrl+R to open the Strategy Tester
-2. Select your strategy from the "Expert Advisor" dropdown
-3. Choose a currency pair and timeframe
-4. Click "Start" to run the test
+1. Launch the containerized MetaTrader terminal using its desktop shortcut
+2. In MetaTrader, press Ctrl+R to open the Strategy Tester
+3. Select your strategy from the "Expert Advisor" dropdown
+4. Choose a currency pair and timeframe
+5. Click "Start" to run the test
 
 ## Advanced Features
 
@@ -135,11 +147,13 @@ Advanced mode with Docker works across operating systems:
 1. Install Docker Desktop for Mac
 2. Clone your framework repository
 3. Run builds using the same Docker commands
+4. Note: You'll still need a Windows machine for initial setup with MetaTrader
 
 **Linux Setup:**
 1. Install Docker and Docker Compose
 2. Clone your framework repository
 3. Run the builds using the same Docker commands
+4. Note: You'll still need a Windows machine for initial setup with MetaTrader
 
 ### Continuous Integration
 
@@ -242,6 +256,15 @@ Common compilation errors:
 1. **Missing include files**: Add `.mqh` files to the include directory
 2. **Syntax errors**: Check the log files in the build directory
 3. **Wine issues**: Try rebuilding the Docker image with `docker compose build --no-cache`
+
+### Containerized MetaTrader Issues
+
+If you have problems with the containerized MetaTrader terminals:
+
+1. Verify original MetaTrader is properly installed
+2. Check that containerization completed successfully
+3. Make sure portable mode is enabled in the containerized copy
+4. Try running the setup script again with the `-Force` parameter
 
 ### Advanced Sync Troubleshooting
 

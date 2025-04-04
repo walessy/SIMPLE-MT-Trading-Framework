@@ -13,16 +13,20 @@ The MT Trading Framework supports two different user levels, each with different
 - Windows computer
 - PowerShell (comes with Windows)
 - Basic knowledge of MQL4/MQL5 language
+- MetaTrader 4 and/or MetaTrader 5 installed
 
 ### Setup
-1. Run `Easy-Setup.ps1` and select the Basic mode
-2. Follow the prompts to set up your environment
-3. No Docker installation required
+1. Install MetaTrader 4 and/or MetaTrader 5 using the standard installation process
+2. Run `Easy-Setup.ps1` and select the Basic mode
+3. Follow the prompts to set up your environment
+4. No Docker installation required
 
 ### How it works
+- The framework creates containerized copies of your existing MetaTrader installations
+- These containers run in portable mode, keeping your development separate from main installations
 - Strategy files are edited directly in your development environment
 - Compilation is done using MetaTrader's compiler
-- Sync script transfers files between development and MetaTrader
+- Sync script transfers files between development and containerized MetaTrader
 - All operations are managed through the user-friendly dashboard
 
 ### Limitations
@@ -42,23 +46,27 @@ The MT Trading Framework supports two different user levels, each with different
 - Docker Desktop installed
 - Git installed
 - Knowledge of MQL4/MQL5 language
+- MetaTrader 4 and/or MetaTrader 5 installed (on Windows)
 
 ### Setup
-1. Ensure Docker Desktop is running
-2. Run `Easy-Setup.ps1` and select the Advanced mode
-3. Follow the prompts to set up your environment
+1. Install MetaTrader 4 and/or MetaTrader 5 using the standard installation process
+2. Ensure Docker Desktop is running
+3. Run `Easy-Setup.ps1` and select the Advanced mode
+4. Follow the prompts to set up your environment
 
 ### How it works
+- The framework creates containerized copies of your existing MetaTrader installations
+- These containers run in portable mode, keeping your development separate from main installations
 - Strategy files are edited in your development environment
 - Compilation is done in a Docker container for consistency
-- Sync script transfers files between development and MetaTrader
+- Sync script transfers files between development and containerized MetaTrader
 - Build process works the same across different computers
 
 ### Advantages
 - Consistent build environment regardless of host OS
 - Faster compilation for multiple files
 - Better support for automated build pipelines
-- No dependency on MetaTrader installation for compilation
+- No dependency on MetaTrader installation for compilation (after initial setup)
 
 ## Choosing the Right Level
 

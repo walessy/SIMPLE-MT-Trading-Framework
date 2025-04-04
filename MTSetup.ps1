@@ -1,12 +1,14 @@
 # MTSetup.ps1
-# Simplified MetaTrader Trading Framework Setup
-# Created: April 2, 2025
+# Revised MetaTrader Trading Framework Setup
+# Created: April 4, 2025
 
 [CmdletBinding()]
 param (
     [string]$BasePath = "C:\Trading\MTFramework",
     [switch]$SkipMT4,
     [switch]$SkipMT5,
+    [string]$MT4BrokerName = "Default",
+    [string]$MT5BrokerName = "Default",
     [switch]$SkipGit,
     [switch]$SkipDocker,
     [string]$DevEnvironmentName,
@@ -21,21 +23,8 @@ $Config = @{
     MT5Path = Join-Path -Path $BasePath -ChildPath "MT5"
     DevPath = Join-Path -Path $BasePath -ChildPath "Dev"
     TestPath = Join-Path -Path $BasePath -ChildPath "Test"
-    DefaultBrokers = @(
-        @{
-            Version = "MT4"
-            BrokerName = "AfterPrime"
-            InstallerUrl = "https://download.mql5.com/cdn/web/afterprime.ltd/mt4/afterprime4setup.exe"
-        },
-        @{
-            Version = "MT5"
-            BrokerName = "AfterPrime"
-            InstallerUrl = "https://download.mql5.com/cdn/web/afterprime.ltd/mt5/afterprime5setup.exe"
-        }
-    )
 }
 #endregion
-
 #region Helper Functions
 function Show-Header {
     param ([string]$Title)
@@ -56,104 +45,6 @@ function Create-Directory {
     }
 }
 
-function Download-File {
-    param (
-        [string]$Url,
-        [string]$OutputPath
-    )
-    
-    if (-not (Test-Path -Path $OutputPath)) {
-        Write-Host "Downloading file from $Url..." -ForegroundColor Yellow
-        try {
-            Invoke-WebRequest -Uri $Url -OutFile $OutputPath
-            Write-Host "Download complete: $OutputPath" -ForegroundColor Green
-            return $true
-        } catch {
-            Write-Host "Error downloading file: $_" -ForegroundColor Red
-            return $false
-        }
-    } else {
-        Write-Host "File already exists: $OutputPath" -ForegroundColor Yellow
-        return $true
-    }
-}
-
-function Install-MetaTrader {
-    param (
-        [string]$Version,
-        [string]$BrokerName,
-        [string]$InstallerUrl,
-        [string]$DestinationPath
-    )
-    
-    $brokerFolderPath = Join-Path -Path $DestinationPath -ChildPath $BrokerName
-    
-    # Check if already installed
-    $terminalExe = if ($Version -eq "MT4") { "terminal.exe" } else { "terminal64.exe" }
-    $terminalPath = Join-Path -Path $brokerFolderPath -ChildPath $terminalExe
-    
-    if (Test-Path -Path $terminalPath) {
-        Write-Host "$Version for $BrokerName is already installed" -ForegroundColor Yellow
-        return @{
-            Version = $Version
-            BrokerName = $BrokerName
-            Path = $brokerFolderPath
-            Terminal = $terminalPath
-        }
-    }
-    
-    # Download installer
-    $installerFileName = Split-Path -Path $InstallerUrl -Leaf
-    $installerPath = Join-Path -Path $Config.BrokerPackagesPath -ChildPath $installerFileName
-    $downloaded = Download-File -Url $InstallerUrl -OutputPath $installerPath
-    
-    if (-not $downloaded) {
-        return $null
-    }
-    
-    # Create broker folder
-    Create-Directory -Path $brokerFolderPath
-    
-    # Install
-    Write-Host "Installing $Version for $BrokerName..." -ForegroundColor Yellow
-    
-    if ($Version -eq "MT4") {
-        # MT4 installation with /portable flag
-        Start-Process -FilePath $installerPath -ArgumentList "/portable", "/D=$brokerFolderPath" -Wait
-    } else {
-        # MT5 installation with /D parameter
-        Start-Process -FilePath $installerPath -ArgumentList "/D=$brokerFolderPath" -Wait
-    }
-    
-    # Verify installation
-    if (Test-Path -Path $terminalPath) {
-        Write-Host "$Version installation for $BrokerName completed successfully!" -ForegroundColor Green
-        return @{
-            Version = $Version
-            BrokerName = $BrokerName
-            Path = $brokerFolderPath
-            Terminal = $terminalPath
-        }
-    } else {
-        # Try alternative terminal name
-        $altTerminalExe = if ($Version -eq "MT4") { "terminal64.exe" } else { "terminal.exe" }
-        $altTerminalPath = Join-Path -Path $brokerFolderPath -ChildPath $altTerminalExe
-        
-        if (Test-Path -Path $altTerminalPath) {
-            Write-Host "$Version installation for $BrokerName completed successfully!" -ForegroundColor Green
-            return @{
-                Version = $Version
-                BrokerName = $BrokerName
-                Path = $brokerFolderPath
-                Terminal = $altTerminalPath
-            }
-        } else {
-            Write-Host "Installation failed - terminal executable not found" -ForegroundColor Red
-            return $null
-        }
-    }
-}
-
 function Create-Shortcut {
     param (
         [string]$TargetPath,
@@ -167,9 +58,20 @@ function Create-Shortcut {
     $WshShell = New-Object -ComObject WScript.Shell
     $Shortcut = $WshShell.CreateShortcut($shortcutFile)
     $Shortcut.TargetPath = $TargetPath
+    
+    # Always add /portable switch for MetaTrader terminals if it's not already in the arguments
+    if ($TargetPath -match "terminal(64)?\.exe$" -and -not $Arguments.Contains("/portable")) {
+        if ([string]::IsNullOrEmpty($Arguments)) {
+            $Arguments = "/portable"
+        } else {
+            $Arguments = "$Arguments /portable"
+        }
+    }
+    
     if (-not [string]::IsNullOrEmpty($Arguments)) {
         $Shortcut.Arguments = $Arguments
     }
+    
     $Shortcut.WorkingDirectory = Split-Path -Path $TargetPath -Parent
     $Shortcut.Description = $ShortcutName
     $Shortcut.IconLocation = $TargetPath
@@ -177,7 +79,155 @@ function Create-Shortcut {
     
     Write-Host "Created shortcut: $shortcutFile" -ForegroundColor Green
 }
-
+function Install-MetaTrader {
+    param (
+        [string]$Version,
+        [string]$BrokerName,
+        [string]$DestinationPath
+    )
+    
+    $brokerFolderPath = Join-Path -Path $DestinationPath -ChildPath $BrokerName
+    
+    # Check if already containerized
+    $terminalExe = if ($Version -eq "MT4") { "terminal.exe" } else { "terminal64.exe" }
+    $terminalPath = Join-Path -Path $brokerFolderPath -ChildPath $terminalExe
+    
+    if (Test-Path -Path $terminalPath) {
+        Write-Host "$Version for $BrokerName is already containerized" -ForegroundColor Yellow
+        return @{
+            Version = $Version
+            BrokerName = $BrokerName
+            Path = $brokerFolderPath
+            Terminal = $terminalPath
+        }
+    }
+    
+    # Find default installation path
+    $defaultInstallPath = $null
+    if ($Version -eq "MT4") {
+        # Common MT4 paths
+        $possiblePaths = @(
+            "${env:ProgramFiles(x86)}\MetaTrader 4",
+            "${env:ProgramFiles}\MetaTrader 4",
+            "${env:LOCALAPPDATA}\Programs\MetaTrader 4"
+        )
+        
+        # Check if broker-specific path exists
+        $brokerPaths = @(
+            "${env:ProgramFiles(x86)}\$BrokerName",
+            "${env:ProgramFiles}\$BrokerName",
+            "${env:LOCALAPPDATA}\Programs\$BrokerName"
+        )
+        
+        $possiblePaths += $brokerPaths
+    } else {
+        # Common MT5 paths
+        $possiblePaths = @(
+            "${env:ProgramFiles(x86)}\MetaTrader 5",
+            "${env:ProgramFiles}\MetaTrader 5",
+            "${env:LOCALAPPDATA}\Programs\MetaTrader 5"
+        )
+        
+        # Check if broker-specific path exists
+        $brokerPaths = @(
+            "${env:ProgramFiles(x86)}\$BrokerName",
+            "${env:ProgramFiles}\$BrokerName",
+            "${env:LOCALAPPDATA}\Programs\$BrokerName"
+        )
+        
+        $possiblePaths += $brokerPaths
+    }
+    
+    # Try to find the installation
+    foreach ($path in $possiblePaths) {
+        if (Test-Path -Path $path) {
+            $defaultInstallPath = $path
+            break
+        }
+    }
+    
+    # If not found automatically, ask user
+    if (-not $defaultInstallPath) {
+        Write-Host "$Version for $BrokerName not found in default locations." -ForegroundColor Yellow
+        Write-Host "Please specify where $Version is installed:" -ForegroundColor Yellow
+        $defaultInstallPath = Read-Host
+        
+        if ([string]::IsNullOrEmpty($defaultInstallPath) -or -not (Test-Path -Path $defaultInstallPath)) {
+            Write-Host "Invalid path or MT installation not found." -ForegroundColor Red
+            Write-Host "Please install $Version using the default installation process first." -ForegroundColor Red
+            Write-Host "You can download from: https://www.metatrader4.com/en/download" -ForegroundColor Yellow
+            return $null
+        }
+    }
+    
+    # Create broker folder
+    Create-Directory -Path $brokerFolderPath
+    
+    # Copy files from installation to container folder
+    Write-Host "Copying $Version files from $defaultInstallPath to container folder..." -ForegroundColor Yellow
+    try {
+        # Use robocopy for better performance and error handling
+        $robocopyArgs = @(
+            """$defaultInstallPath""",
+            """$brokerFolderPath""",
+            "/E",         # Copy subdirectories, including empty ones
+            "/XJ",        # Exclude junction points
+            "/R:2",       # Number of retries
+            "/W:1",       # Wait time between retries
+            "/NFL",       # No file list
+            "/NDL"        # No directory list
+        )
+        
+        Start-Process "robocopy" -ArgumentList $robocopyArgs -Wait -NoNewWindow
+        
+        # Verify copy
+        if (Test-Path -Path $terminalPath) {
+            Write-Host "$Version containerization for $BrokerName completed successfully!" -ForegroundColor Green
+            
+            # Set up portable configuration
+            $configFile = Join-Path -Path $brokerFolderPath -ChildPath "origin.ini"
+            if (-not (Test-Path -Path $configFile)) {
+                Set-Content -Path $configFile -Value "[Common]`r`nPortable=1"
+                Write-Host "Set portable mode configuration" -ForegroundColor Green
+            }
+            
+            return @{
+                Version = $Version
+                BrokerName = $BrokerName
+                Path = $brokerFolderPath
+                Terminal = $terminalPath
+            }
+        } else {
+            # Try alternative terminal name
+            $altTerminalExe = if ($Version -eq "MT4") { "terminal64.exe" } else { "terminal.exe" }
+            $altTerminalPath = Join-Path -Path $brokerFolderPath -ChildPath $altTerminalExe
+            
+            if (Test-Path -Path $altTerminalPath) {
+                Write-Host "$Version containerization for $BrokerName completed successfully!" -ForegroundColor Green
+                
+                # Set up portable configuration
+                $configFile = Join-Path -Path $brokerFolderPath -ChildPath "origin.ini"
+                if (-not (Test-Path -Path $configFile)) {
+                    Set-Content -Path $configFile -Value "[Common]`r`nPortable=1"
+                    Write-Host "Set portable mode configuration" -ForegroundColor Green
+                }
+                
+                return @{
+                    Version = $Version
+                    BrokerName = $BrokerName
+                    Path = $brokerFolderPath
+                    Terminal = $altTerminalPath
+                }
+            } else {
+                Write-Host "Containerization failed - terminal executable not found" -ForegroundColor Red
+                return $null
+            }
+        }
+    } catch {
+        Write-Host "Error copying files: $_" -ForegroundColor Red
+        return $null
+    }
+}
 function Setup-Git {
     param ([string]$BasePath)
     
@@ -251,7 +301,6 @@ BrokerPackages/*.exe
         Pop-Location
     }
 }
-
 function Setup-Docker {
     param ([string]$BasePath)
     
@@ -354,8 +403,32 @@ services:
         Write-Host "docker-compose.yml already exists" -ForegroundColor Yellow
     }
     
-    # Create build scripts
-    $buildMt4Path = Join-Path -Path $scriptsDir -ChildPath "build_mt4.sh"
+    # Create build.bat
+    $buildBatchPath = Join-Path -Path $BasePath -ChildPath "build.bat"
+    if (-not (Test-Path -Path $buildBatchPath)) {
+        $buildBatchContent = @"
+@echo off
+echo Building MQL files with Docker...
+cd %~dp0
+docker compose build
+docker compose run --rm mt_builder bash -c "build_mt4 && build_mt5"
+echo Build complete!
+pause
+"@
+        Set-Content -Path $buildBatchPath -Value $buildBatchContent
+        Write-Host "Created build.bat" -ForegroundColor Green
+    } else {
+        Write-Host "build.bat already exists" -ForegroundColor Yellow
+    }
+    
+    Write-Host "Docker build environment set up successfully!" -ForegroundColor Green
+    return $true
+}
+# Create build scripts
+function Create-BuildScripts {
+    param ([string]$ScriptsDir)
+    
+    $buildMt4Path = Join-Path -Path $ScriptsDir -ChildPath "build_mt4.sh"
     if (-not (Test-Path -Path $buildMt4Path)) {
         $buildMt4Content = @"
 #!/bin/bash
@@ -408,7 +481,7 @@ echo "MT4 build complete. Output in \$BUILD_OUTPUT_DIR"
         Write-Host "build_mt4.sh already exists" -ForegroundColor Yellow
     }
     
-    $buildMt5Path = Join-Path -Path $scriptsDir -ChildPath "build_mt5.sh"
+    $buildMt5Path = Join-Path -Path $ScriptsDir -ChildPath "build_mt5.sh"
     if (-not (Test-Path -Path $buildMt5Path)) {
         $buildMt5Content = @"
 #!/bin/bash
@@ -460,29 +533,7 @@ echo "MT5 build complete. Output in \$BUILD_OUTPUT_DIR"
     } else {
         Write-Host "build_mt5.sh already exists" -ForegroundColor Yellow
     }
-    
-    # Create build batch file
-    $buildBatchPath = Join-Path -Path $BasePath -ChildPath "build.bat"
-    if (-not (Test-Path -Path $buildBatchPath)) {
-        $buildBatchContent = @"
-@echo off
-echo Building MQL files with Docker...
-cd %~dp0
-docker compose build
-docker compose run --rm mt_builder bash -c "build_mt4 && build_mt5"
-echo Build complete!
-pause
-"@
-        Set-Content -Path $buildBatchPath -Value $buildBatchContent
-        Write-Host "Created build.bat" -ForegroundColor Green
-    } else {
-        Write-Host "build.bat already exists" -ForegroundColor Yellow
-    }
-    
-    Write-Host "Docker build environment set up successfully!" -ForegroundColor Green
-    return $true
 }
-
 function Create-DevEnvironment {
     param (
         [string]$BasePath,
@@ -671,13 +722,15 @@ if ($Help) {
     Write-Host "Usage: .\MTSetup.ps1 [options]" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Options:" -ForegroundColor Yellow
-    Write-Host "  -BasePath <path>        Base directory (default: C:\Trading\MTFramework)" -ForegroundColor White
-    Write-Host "  -SkipMT4                Skip MT4 installation" -ForegroundColor White
-    Write-Host "  -SkipMT5                Skip MT5 installation" -ForegroundColor White
-    Write-Host "  -SkipGit                Skip Git repository setup" -ForegroundColor White
-    Write-Host "  -SkipDocker             Skip Docker build environment setup" -ForegroundColor White
-    Write-Host "  -DevEnvironmentName     Name of development environment to create" -ForegroundColor White
-    Write-Host "  -Help                   Display this help message" -ForegroundColor White
+    Write-Host "  -BasePath <path>         Base directory (default: C:\Trading\MTFramework)" -ForegroundColor White
+    Write-Host "  -SkipMT4                 Skip MT4 containerization" -ForegroundColor White
+    Write-Host "  -SkipMT5                 Skip MT5 containerization" -ForegroundColor White
+    Write-Host "  -MT4BrokerName <n>       Name for MT4 broker (default: Default)" -ForegroundColor White
+    Write-Host "  -MT5BrokerName <n>       Name for MT5 broker (default: Default)" -ForegroundColor White
+    Write-Host "  -SkipGit                 Skip Git repository setup" -ForegroundColor White
+    Write-Host "  -SkipDocker              Skip Docker build environment setup" -ForegroundColor White
+    Write-Host "  -DevEnvironmentName      Name of development environment to create" -ForegroundColor White
+    Write-Host "  -Help                    Display this help message" -ForegroundColor White
     
     exit 0
 }
@@ -696,34 +749,48 @@ Create-Directory -Path $Config.TestPath
 Create-Directory -Path (Join-Path -Path $Config.BasePath -ChildPath "src")
 Create-Directory -Path (Join-Path -Path $Config.BasePath -ChildPath "build")
 
-# Install MetaTrader terminals
+# Install MetaTrader terminals (now containerizing existing installations)
 $installations = @()
 
 if (-not $SkipMT4) {
-    Show-Header "Installing MT4"
-    foreach ($broker in $Config.DefaultBrokers | Where-Object { $_.Version -eq "MT4" }) {
-        $result = Install-MetaTrader -Version $broker.Version -BrokerName $broker.BrokerName -InstallerUrl $broker.InstallerUrl -DestinationPath $Config.MT4Path
-        if ($result) {
-            $installations += $result
-        }
+    Show-Header "Containerizing MT4"
+    
+    # Check if broker name was provided
+    if ([string]::IsNullOrEmpty($MT4BrokerName)) {
+        $MT4BrokerName = "Default"
+        Write-Host "Using default broker name: $MT4BrokerName" -ForegroundColor Yellow
+    }
+    
+    $result = Install-MetaTrader -Version "MT4" -BrokerName $MT4BrokerName -DestinationPath $Config.MT4Path
+    if ($result) {
+        $installations += $result
+    } else {
+        Write-Host "Failed to containerize MT4 installation." -ForegroundColor Red
     }
 } else {
     Write-Host "Skipping MT4 installation" -ForegroundColor Yellow
 }
 
 if (-not $SkipMT5) {
-    Show-Header "Installing MT5"
-    foreach ($broker in $Config.DefaultBrokers | Where-Object { $_.Version -eq "MT5" }) {
-        $result = Install-MetaTrader -Version $broker.Version -BrokerName $broker.BrokerName -InstallerUrl $broker.InstallerUrl -DestinationPath $Config.MT5Path
-        if ($result) {
-            $installations += $result
-        }
+    Show-Header "Containerizing MT5"
+    
+    # Check if broker name was provided
+    if ([string]::IsNullOrEmpty($MT5BrokerName)) {
+        $MT5BrokerName = "Default"
+        Write-Host "Using default broker name: $MT5BrokerName" -ForegroundColor Yellow
+    }
+    
+    $result = Install-MetaTrader -Version "MT5" -BrokerName $MT5BrokerName -DestinationPath $Config.MT5Path
+    if ($result) {
+        $installations += $result
+    } else {
+        Write-Host "Failed to containerize MT5 installation." -ForegroundColor Red
     }
 } else {
     Write-Host "Skipping MT5 installation" -ForegroundColor Yellow
 }
 
-# Create shortcuts
+# Create shortcuts with /portable switch
 Show-Header "Creating Shortcuts"
 foreach ($installation in $installations) {
     $shortcutName = "$($installation.BrokerName) $($installation.Version)"
@@ -741,6 +808,9 @@ if (-not $SkipGit) {
 # Setup Docker build environment
 if (-not $SkipDocker) {
     Show-Header "Setting up Docker Build Environment"
+    $scriptsDir = Join-Path -Path $Config.BasePath -ChildPath "scripts"
+    Create-Directory -Path $scriptsDir
+    Create-BuildScripts -ScriptsDir $scriptsDir
     Setup-Docker -BasePath $Config.BasePath
 } else {
     Write-Host "Skipping Docker build environment setup" -ForegroundColor Yellow
