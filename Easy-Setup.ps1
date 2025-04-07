@@ -1,4 +1,4 @@
-﻿# Easy-Setup.ps1
+# Easy-Setup.ps1
 # Simple Setup Script for MT Trading Framework
 
 # Ensure script runs from its own directory
