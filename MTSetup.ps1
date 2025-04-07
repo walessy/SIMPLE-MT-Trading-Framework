@@ -170,8 +170,7 @@ if ($installations.Count -eq 0) {
 }
 
 if (-not $SkipDocker) {
-    # Advanced mode (unchanged for brevity, but not relevant to your case)
-    Write-Status "Advanced mode not implemented in this fix for brevity" "Yellow"
+    Write-Status "Advanced mode not implemented in this version for brevity" "Yellow"
 } else {
     if ($DevEnvironmentName -and $installations.Count -gt 0) {
         Setup-Basic-Strategy-Folders -Installations $installations -StrategyName $DevEnvironmentName
