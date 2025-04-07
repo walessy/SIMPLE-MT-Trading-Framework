@@ -9,7 +9,8 @@ param (
     [string]$MT5Path = "",
     [switch]$SkipDocker,
     [string]$DevEnvironmentName,
-    [string]$TestEnvironmentName
+    [string]$TestEnvironmentName,
+    [string]$StrategyName = "DefaultStrategy"  # New parameter for strategy name
 )
 
 # Ensure script runs from its own directory
@@ -18,8 +19,8 @@ Set-Location -Path $PSScriptRoot
 # Configuration
 $Config = @{
     BasePath = $BasePath
-    MT4Path = Join-Path -Path $BasePath -ChildPath "MT4"
-    MT5Path = Join-Path -Path $BasePath -ChildPath "MT5"
+    MT4RootPath = Join-Path -Path $BasePath -ChildPath "MT4"
+    MT5RootPath = Join-Path -Path $BasePath -ChildPath "MT5"
     DevPath = Join-Path -Path $BasePath -ChildPath "Dev"
     TestPath = Join-Path -Path $BasePath -ChildPath "Test"
 }
@@ -44,34 +45,44 @@ function Create-Shortcut {
     Write-Status "Created shortcut: $ShortcutName in $BrokerName folder" "Green"
 }
 
-function Install-MetaTrader {
-    param ([string]$Version, [string]$BrokerName, [string]$DestinationPath, [string]$ExplicitPath = "")
+function Install-MetaTrader-For-Strategy {
+    param ([string]$Version, [string]$BrokerName, [string]$StrategyName, [string]$RootPath, [string]$ExplicitPath = "")
     $exe = if ($Version -eq "MT4") { "terminal.exe" } else { "terminal64.exe" }
-    $destPath = Join-Path -Path $DestinationPath -ChildPath $BrokerName
-    Create-Directory -Path $destPath
-    $terminalPath = Join-Path -Path $destPath -ChildPath $exe
+    $strategyPath = Join-Path -Path $RootPath -ChildPath "$BrokerName\$StrategyName"
+    Create-Directory -Path $strategyPath
+    $terminalPath = Join-Path -Path $strategyPath -ChildPath $exe
 
-    if (Test-Path $terminalPath) { Write-Status "$Version for $BrokerName already exists" "Yellow"; return @{ Version = $Version; BrokerName = $BrokerName; Path = $destPath; Terminal = $terminalPath } }
+    if (Test-Path $terminalPath) { 
+        Write-Status "$Version for $BrokerName ($StrategyName) already exists" "Yellow"
+        return @{ Version = $Version; BrokerName = $BrokerName; StrategyName = $StrategyName; Path = $strategyPath; Terminal = $terminalPath }
+    }
     
     $sourcePath = if ($ExplicitPath -and (Test-Path $ExplicitPath)) { $ExplicitPath } else {
         $paths = @("${env:ProgramFiles(x86)}\*$BrokerName*", "${env:ProgramFiles}\*$BrokerName*") | ForEach-Object { Get-ChildItem -Path $_ -Directory -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName }
         $paths | Where-Object { Test-Path (Join-Path -Path $_ -ChildPath $exe) } | Select-Object -First 1
     }
     
-    if (-not $sourcePath) { Write-Status "$Version for $BrokerName not found. Please install it first." "Red"; return $null }
-    
-    robocopy "$sourcePath" "$destPath" /E /XJ /R:2 /W:1 /NFL /NDL
-    if (Test-Path $terminalPath) {
-        Set-Content -Path (Join-Path -Path $destPath -ChildPath "origin.ini") -Value "[Common]`r`nPortable=1"
-        Write-Status "$Version containerized for $BrokerName" "Green"
-        return @{ Version = $Version; BrokerName = $BrokerName; Path = $destPath; Terminal = $terminalPath }
+    if (-not $sourcePath) { 
+        Write-Status "$Version for $BrokerName not found. Please install it first." "Red"
+        return $null
     }
-    Write-Status "Failed to containerize $Version" "Red"; return $null
+    
+    robocopy "$sourcePath" "$strategyPath" /E /XJ /R:2 /W:1 /NFL /NDL
+    if (Test-Path $terminalPath) {
+        Set-Content -Path (Join-Path -Path $strategyPath -ChildPath "origin.ini") -Value "[Common]`r`nPortable=1"
+        Write-Status "$Version containerized for $BrokerName ($StrategyName)" "Green"
+        return @{ Version = $Version; BrokerName = $BrokerName; StrategyName = $StrategyName; Path = $strategyPath; Terminal = $terminalPath }
+    }
+    Write-Status "Failed to containerize $Version for $StrategyName" "Red"
+    return $null
 }
 
-function Setup-Basic-Strategy-Folders {
+function Setup-Strategy-Folders {
     param ([array]$Installations, [string]$StrategyName)
-    if (-not $Installations -or $Installations.Count -eq 0) { Write-Status "No valid installations provided for strategy setup" "Red"; return }
+    if (-not $Installations -or $Installations.Count -eq 0) { 
+        Write-Status "No valid installations provided for strategy setup" "Red"
+        return
+    }
     
     $mq4Expert = @"
 // SampleStrategy.mq4
@@ -141,7 +152,7 @@ void OnStart() { Alert("Sample Script Executed on " + _Symbol); }
             }
         }
     }
-    Write-Status "Basic strategy folders created for '$StrategyName' in MT4/MT5 containers with sample files" "Green"
+    Write-Status "Strategy folders created for '$StrategyName' with sample files" "Green"
 }
 
 # Main Setup
@@ -149,33 +160,36 @@ Write-Status "Starting MT Trading Framework Setup" "Cyan"
 Create-Directory -Path $BasePath
 $installations = @()
 
-if (-not $SkipMT4) { 
-    $mt4Inst = Install-MetaTrader -Version "MT4" -BrokerName $MT4BrokerName -DestinationPath $Config.MT4Path -ExplicitPath $MT4Path 
-    if ($mt4Inst) { 
-        $installations += $mt4Inst
-        Create-Shortcut -TargetPath $mt4Inst.Terminal -ShortcutName "MT4 - $MT4BrokerName" -BrokerName $MT4BrokerName
+if ($StrategyName) {
+    if (-not $SkipMT4) {
+        $mt4Inst = Install-MetaTrader-For-Strategy -Version "MT4" -BrokerName $MT4BrokerName -StrategyName $StrategyName -RootPath $Config.MT4RootPath -ExplicitPath $MT4Path
+        if ($mt4Inst) {
+            $installations += $mt4Inst
+            Create-Shortcut -TargetPath $mt4Inst.Terminal -ShortcutName "MT4 - $MT4BrokerName ($StrategyName)" -BrokerName $MT4BrokerName
+        }
     }
-}
-if (-not $SkipMT5) { 
-    $mt5Inst = Install-MetaTrader -Version "MT5" -BrokerName $MT5BrokerName -DestinationPath $Config.MT5Path -ExplicitPath $MT5Path 
-    if ($mt5Inst) { 
-        $installations += $mt5Inst
-        Create-Shortcut -TargetPath $mt5Inst.Terminal -ShortcutName "MT5 - $MT5BrokerName" -BrokerName $MT5BrokerName
+    if (-not $SkipMT5) {
+        $mt5Inst = Install-MetaTrader-For-Strategy -Version "MT5" -BrokerName $MT5BrokerName -StrategyName $StrategyName -RootPath $Config.MT5RootPath -ExplicitPath $MT5Path
+        if ($mt5Inst) {
+            $installations += $mt5Inst
+            Create-Shortcut -TargetPath $mt5Inst.Terminal -ShortcutName "MT5 - $MT5BrokerName ($StrategyName)" -BrokerName $MT5BrokerName
+        }
     }
-}
 
-if ($installations.Count -eq 0) { 
-    Write-Status "No MetaTrader installations found. Setup aborted." "Red"
-    exit 1 
-}
+    if ($installations.Count -eq 0) {
+        Write-Status "No MetaTrader installations succeeded for strategy '$StrategyName'. Setup aborted." "Red"
+        exit 1
+    }
 
-if (-not $SkipDocker) {
-    Write-Status "Advanced mode not implemented in this version for brevity" "Yellow"
+    if (-not $SkipDocker) {
+        Write-Status "Advanced mode not implemented in this version for brevity" "Yellow"
+    } else {
+        Setup-Strategy-Folders -Installations $installations -StrategyName $StrategyName
+        Write-Status "Basic mode: Strategy '$StrategyName' setup complete with dedicated MT installations." "Yellow"
+    }
 } else {
-    if ($DevEnvironmentName -and $installations.Count -gt 0) {
-        Setup-Basic-Strategy-Folders -Installations $installations -StrategyName $DevEnvironmentName
-    }
-    Write-Status "Basic mode selected: MT4/MT5 installations and basic strategy folders created with sample files." "Yellow"
+    Write-Status "No strategy name provided (StrategyName). Setup aborted." "Red"
+    exit 1
 }
 
 Write-Status "Setup complete at $BasePath" "Green"
