@@ -18,3 +18,8 @@ Changing the Execution Policy
     To run a script temporarily without changing the policy permanently, use the following command:
 
     powershell -ExecutionPolicy Bypass -File script.ps1
+
+
+    Temprary session bypass
+
+    powershell -ExecutionPolicy Bypass
