@@ -57,7 +57,9 @@ Test-DirectoryExists -Path "$mt4Path\Templates\$strategyName"
 Test-FileExists -Path "$mt4Path\Templates\$strategyName\SampleTemplate.tpl"
 Test-FileExists -Path "$mt4Path\origin.ini"
 Test-FileExists -Path "$([System.Environment]::GetFolderPath('Desktop'))\$mt4BrokerName\MT4 - $mt4BrokerName [$collectionName-$strategyName]Strategy.lnk"
-
+# After setup
+Test-DirectoryExists -Path "$testDir\MTFramework\Dev\test\build\mt4"
+Test-FileExists -Path "$testDir\MTFramework\Dev\test\build\mt4\SampleStrategy.ex4"  # If compiled
 # Test Docker setup (image built, but container should be stopped after compilation)
 $dockerImage = docker images -q mt_builder
 if ($dockerImage) { Write-Host "PASS: Docker image mt_builder built" -ForegroundColor Green } else { Write-Host "FAIL: Docker image mt_builder not built" -ForegroundColor Red }
