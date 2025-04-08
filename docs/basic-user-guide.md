@@ -21,165 +21,166 @@ Before running the setup script:
 ### 2. Run the Easy Setup
 
 1. Right-click on `Easy-Setup.ps1` and select "Run with PowerShell (Admin)"
-2. Enter your strategy name when prompted
-3. Select "Basic" as your user level
-4. Choose which platforms you want (MT4, MT5, or both)
-5. Enter broker names when prompted
-6. Confirm your choices
+2. Follow the prompts:
+   - Select MetaTrader version (MT4, MT5, or both)
+   - Enter your broker names
+   - Provide installation paths (or let the script auto-detect)
+   - Choose "Basic" setup mode (option 1)
+   - Enter your collection name (e.g., "coll")
+   - Enter your strategy name (e.g., "Amos")
 
 The setup will:
 - Locate your existing MetaTrader installations
 - Create containerized copies that run in portable mode
-- Set up your framework directory structure
-- Create desktop shortcuts
+- Set up your framework directory structure with collection and strategy organization
+- Create desktop shortcuts organized by broker
 - Add sample strategy files
 
 ### 3. Understanding Your Environment
 
 After setup, you'll have:
 
-- **Strategy Folder**: `C:\Trading\MTFramework\Dev\YourStrategy\src\strategies\`
-  This is where you write your strategy code (.mq4 and .mq5 files)
+- **Framework Root**: `C:\Trading\MTFramework\`
+- **MetaTrader Folders**:
+  - `C:\Trading\MTFramework\MT4\[BrokerName]\[CollectionName]\MT4\`
+  - `C:\Trading\MTFramework\MT5\[BrokerName]\[CollectionName]\MT5\`
+- **Strategy Structure**:
+  - MQL4/MQL5 folders containing:
+    - Experts\[StrategyName]\
+    - Indicators\[StrategyName]\
+    - Scripts\[StrategyName]\
+    - Libraries\[StrategyName]\
+    - Include\[StrategyName]\
+    - Files\[StrategyName]\
+    - Images\[StrategyName]\
+  - Templates\[StrategyName]\
 
-- **Containerized MetaTrader Folders**: `C:\Trading\MTFramework\MT4\` and `C:\Trading\MTFramework\MT5\`
-  These contain portable copies of your MetaTrader terminals
+- **Desktop Shortcuts**: Located in folders named after your brokers:
+  - `MT4 - [BrokerName] [[CollectionName]-[StrategyName]Strategy]`
+  - `MT5 - [BrokerName] [[CollectionName]-[StrategyName]Strategy]`
 
-- **Desktop Shortcuts**:
-  - **Build YourStrategy (Basic)**: Copies files to containerized MetaTrader
-  - **Sync YourStrategy**: Copies compiled files back to your development environment
-  - **MetaTrader terminals**: Opens the portable trading platforms
-
-## Development Workflow (Basic User)
+## Development Workflow
 
 ### 1. Write Your Strategy
 
-1. Navigate to your strategy folder:
+1. Open your containerized MetaTrader terminal using the desktop shortcut
+2. Open MetaEditor (F4) to edit your strategy files
+3. Navigate to your strategy folder structure:
+   - For MT4: `MQL4\Experts\[StrategyName]\`
+   - For MT5: `MQL5\Experts\[StrategyName]\`
+4. Edit or create new strategy files
+
+Alternatively, you can use your preferred text editor to modify the files directly in the folders.
+
+### 2. Compile Your Strategy
+
+1. In MetaEditor, compile your strategy by pressing F7
+2. The compiled files (.ex4 for MT4, .ex5 for MT5) will be created in the same folder
+
+### 3. Test Your Strategy
+
+1. In the MetaTrader terminal, open the Strategy Tester (Ctrl+R)
+2. Select your strategy from the "Expert Advisor" dropdown (found under your strategy name)
+3. Configure test parameters and run your test
+
+### 4. Creating Trading Templates
+
+1. Set up your chart with indicators and settings
+2. Right-click on the chart and select "Template" > "Save Template"
+3. Save it in the Templates\[StrategyName]\ folder with a descriptive name
+
+## Managing Collections and Strategies
+
+The framework organizes your trading systems using collections and strategies:
+
+- **Collection**: A group of related strategies (e.g., "Trend", "Scalping", "Portfolio")
+- **Strategy**: A specific trading approach within a collection (e.g., "MACD_Cross", "RSI_Range")
+
+This organization allows you to:
+- Maintain multiple trading approaches
+- Test different variations of strategies
+- Keep related indicators and scripts together
+- Share setups between different brokers
+
+## Git Integration
+
+The framework includes Git support for version control:
+
+1. Run the `Git Repository Setup for MT Trading Framework.txt` script to:
+   - Initialize a Git repository
+   - Configure .gitignore for MetaTrader-specific files
+   - Set up Git LFS for handling binary files
+   - Create initial project structure
+
+2. Use standard Git commands to track your changes:
    ```
-   C:\Trading\MTFramework\Dev\YourStrategy\src\strategies\
+   git add .
+   git commit -m "Description of changes"
+   git push
    ```
 
-2. Create a new file or edit the sample strategy
-   - Use any text editor (like Notepad, Notepad++, or VSCode)
-   - Save your strategy as `MyStrategy.mq4` (for MT4) or `MyStrategy.mq5` (for MT5)
+## Working with Multiple Brokers
 
-### 2. Copy and Compile
+The framework supports multiple brokers by:
 
-Since you're using the Basic mode, compilation happens in MetaTrader:
+1. Creating separate containerized MetaTrader installations for each broker
+2. Organizing desktop shortcuts in broker-specific folders
+3. Allowing the same strategy to be tested across different brokers
 
-1. Click the "Build YourStrategy (Basic)" shortcut on your desktop
-2. This copies your strategy files to the containerized MetaTrader folders
-3. Open the containerized MetaTrader terminal using its desktop shortcut
-   (Note: These are different from your regular MetaTrader installations)
-4. In MetaTrader, open the Navigator panel (Ctrl+N if not visible)
-5. Find your strategy under "Expert Advisors"
-6. Right-click on it and select "Compile" (or press F7)
+## Upgrading to Advanced Mode
 
-### 3. Sync Files
+If you later decide to use the Docker-based advanced mode:
 
-After compiling in MetaTrader, you need to sync the compiled files back:
-
-1. Close the MetaTrader terminal
-2. Click the "Sync YourStrategy" shortcut on your desktop
-
-This copies the compiled files (.ex4 or .ex5) back to your development environment.
-
-### 4. Test Your Strategy
-
-1. In the containerized MetaTrader terminal, press Ctrl+R to open the Strategy Tester
-2. Select your strategy from the "Expert Advisor" dropdown
-3. Choose a currency pair and timeframe
-4. Click "Start" to run the test
-
-## Using MetaTrader's Editor (Optional)
-
-If you prefer MetaTrader's built-in editor:
-
-1. In the containerized MetaTrader terminal, right-click on your strategy in the Navigator panel
-2. Select "Modify" to open the editor
-3. Make your changes and save
-4. Compile directly in MetaTrader by pressing F7
-5. Use "Sync YourStrategy" to copy files back to your development environment
-
-## Key Commands for Basic Users
-
-### Dashboard
-
-The dashboard provides a user-friendly interface:
-
-1. Run `MT-Dashboard.ps1`
-2. Navigate menus with number keys
-3. Access all functionality without remembering commands
-
-### Manual Sync
-
-If you need to manually sync:
-
-```powershell
-.\Sync-MTEnvironment.ps1 -DevEnvironmentName "YourStrategy" -SyncDirection MTToDev
-```
-
-This copies files from MetaTrader to your development environment.
-
-## Common Questions for Basic Users
-
-### Why are there separate MetaTrader terminals?
-
-The framework creates containerized copies of your MetaTrader installations that run in portable mode. This keeps your development separate from your main trading environment and ensures consistency.
-
-### Why do I need to sync after compiling?
-
-MetaTrader saves compiled files in its own folders. Syncing copies these files to your development environment, keeping everything organized and backed up.
-
-### Can I edit files directly in MetaTrader?
-
-Yes! Just remember to sync the changes back to your development environment to keep everything consistent.
-
-### What's the difference between Basic and Advanced mode?
-
-Basic mode uses MetaTrader's own compiler and doesn't require Docker, making it simpler to set up. Advanced mode uses Docker for compilation, which provides better consistency across machines but requires additional software.
-
-### Do I need to run the build script before each test?
-
-Only if you've made changes to your strategy. If you're just adjusting test parameters, you can run tests without rebuilding.
-
-### How do I upgrade to Advanced mode later?
-
-1. Install Docker Desktop
-2. Run `.\MTSetup.ps1 -ConfigureDocker`
-3. Use the "Build" shortcut instead of "Build (Basic)"
+1. Install Docker Desktop for Windows
+2. Run the setup script again, selecting "Advanced" mode (option 2)
+3. The script will set up Docker and compile your strategies automatically
 
 ## Troubleshooting
 
-### Compilation errors in MetaTrader
+### MetaTrader Doesn't Find Your Broker
 
-1. Check the "Experts" tab at the bottom of MetaTrader
-2. Look for error messages
-3. Fix the errors in your code and try again
+1. Check if your broker name matches exactly what's in the installation folder
+2. Try providing the explicit path when running the setup
 
-### Files not showing in MetaTrader
+### Compilation Errors
 
-1. Check if the build script ran successfully
-2. Refresh the Navigator panel (right-click > Refresh)
-3. Verify files were copied to the correct location
+1. Check the "Experts" tab at the bottom of MetaEditor for error messages
+2. Verify that your code syntax is correct
+3. Make sure any included files are in the correct locations
 
-### Sync issues
+### Missing Files After Setup
 
-1. Make sure MetaTrader is closed during sync
-2. Run the sync script with the `-Force` parameter
-3. Check file permissions
+1. Verify that your original MetaTrader installation was found
+2. Check file permissions on your source and destination folders
+3. Try running the setup script with administrator privileges
 
-### Portable MetaTrader not starting
+### Terminal Won't Start in Portable Mode
 
-1. Check if the original MetaTrader installation is still available
-2. Verify the containerized copy was created correctly
-3. Try running the setup script again
+1. Make sure the portable flag is set in the origin.ini file
+2. Check that all required files were copied during setup
+3. Try removing the containerized copy and running setup again
 
-## Next Steps
+## Sample Strategy Structure
 
-Once you're comfortable with basics:
-1. Learn more about MQL programming
-2. Create custom indicators
-3. Explore more advanced trading strategies
-4. Consider upgrading to Advanced mode if you need more features
+The framework provides sample files for each component of your strategy:
+
+1. **Expert Advisors**: Trading algorithms (MQL4/Experts/[StrategyName]/SampleStrategy.mq4)
+2. **Indicators**: Technical indicators (MQL4/Indicators/[StrategyName]/SampleIndicator.mq4)
+3. **Scripts**: Utility scripts (MQL4/Scripts/[StrategyName]/SampleScript.mq4)
+4. **Libraries**: Reusable code (MQL4/Libraries/[StrategyName]/SampleLibrary.mq4)
+5. **Include Files**: Header files (MQL4/Include/[StrategyName]/SampleInclude.mqh)
+6. **Templates**: Chart templates (Templates/[StrategyName]/SampleTemplate.tpl)
+
+These samples provide a starting point for your strategy development.
+
+## Best Practices
+
+1. **Keep Strategy Components Together**: Place all related files in the same strategy folder
+2. **Use Descriptive Names**: Name files clearly to identify their purpose
+3. **Document Your Code**: Add comments explaining your strategy logic
+4. **Test Incrementally**: Make small changes and test frequently
+5. **Back Up Your Work**: Use Git to track changes and protect your code
+6. **Maintain Templates**: Save chart setups as templates for quick access
+7. **Use Include Files**: Place common code in include files to share between components
 
 Happy trading!
