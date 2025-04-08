@@ -49,7 +49,11 @@ Write-Host "2. Advanced (Include build environment with Docker)"
 $modeChoice = Read-Host "Enter your choice (1-2)"
 $skipDocker = $modeChoice -ne "2"
 
-# Prompt for strategy name (used in both modes)
+# Prompt for collection name
+$collectionName = Read-Host "Enter collection name (e.g., coll)"
+if ([string]::IsNullOrWhiteSpace($collectionName)) { $collectionName = "DefaultCollection" }
+
+# Prompt for strategy name
 $strategyName = Read-Host "Enter strategy name (e.g., Amos)"
 if ([string]::IsNullOrWhiteSpace($strategyName)) { $strategyName = "DefaultStrategy" }
 
@@ -63,10 +67,8 @@ $params = @{
     MT4Path = $mt4Path
     MT5Path = $mt5Path
     SkipDocker = $skipDocker
-    DevEnvironmentName = $strategyName
-}
-if (-not $skipDocker) {
-    $params.TestEnvironmentName = "Test_$strategyName"
+    StrategyName = $strategyName
+    CollectionName = $collectionName  # Pass the collection name
 }
 
 # Run MTSetup.ps1 using absolute path
