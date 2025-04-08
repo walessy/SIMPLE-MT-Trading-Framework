@@ -1,34 +1,34 @@
 #!/bin/bash
 set -e
 
-echo "Building MT5 files..."
+echo "Building MT4 files..."
 
 # Navigate to source directory
 cd /app/src
 
 # Configure directories
-MT5_METAEDITOR_PATH="/usr/local/bin"  # Matches Dockerfile
-BUILD_OUTPUT_DIR="/app/build/mt5"
+MT4_METAEDITOR_PATH="/root/.wine/drive_c/Program Files/MetaQuotes/MetaEditor"
+BUILD_OUTPUT_DIR="/app/build/mt4"
 
 # Ensure build directory exists
 mkdir -p "$BUILD_OUTPUT_DIR"
 
-# Compile each MQL5 file
-find . -type f -name "*.mq5" | while read -r file; do
+# Compile each MQL4 file
+find . -type f -name "*.mq4" | while read -r file; do
     filename=$(basename "$file")
     basename="${filename%.*}"
     
     echo "Compiling: $filename"
     
     # Run MetaEditor compiler in Wine with Xvfb
-    xvfb-run wine "$MT5_METAEDITOR_PATH/metaeditor64.exe" /compile:"$file" /log:"$BUILD_OUTPUT_DIR/${basename}.log"
+    xvfb-run wine "$MT4_METAEDITOR_PATH/metaeditor.exe" /compile:"$file" /log:"$BUILD_OUTPUT_DIR/${basename}.log"
     
     # Check if compilation was successful
-    ex5_file="${file%.*}.ex5"
-    if [ -f "$ex5_file" ]; then
-        echo "Compilation successful: $ex5_file"
+    ex4_file="${file%.*}.ex4"
+    if [ -f "$ex4_file" ]; then
+        echo "Compilation successful: $ex4_file"
         # Move compiled file to build directory
-        mv "$ex5_file" "$BUILD_OUTPUT_DIR"
+        mv "$ex4_file" "$BUILD_OUTPUT_DIR"
     else
         echo "Compilation failed for $file. Check log at $BUILD_OUTPUT_DIR/${basename}.log"
         cat "$BUILD_OUTPUT_DIR/${basename}.log"
@@ -39,4 +39,4 @@ done
 mkdir -p "$BUILD_OUTPUT_DIR/include"
 find . -type f -name "*.mqh" -exec cp {} "$BUILD_OUTPUT_DIR/include/" \;
 
-echo "MT5 build complete. Output in $BUILD_OUTPUT_DIR"
+echo "MT4 build complete. Output in $BUILD_OUTPUT_DIR"

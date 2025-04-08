@@ -81,34 +81,187 @@ function Setup-Strategy-Folders {
     
     foreach ($inst in $Installations) {
         if ($inst -and $inst.Path) {
+            # MQL directory for most subfolders
             $mqlDir = Join-Path -Path $inst.Path -ChildPath "MQL$($inst.Version[-1])"
             Create-Directory -Path $mqlDir
-            $subFolders = @("Experts", "Indicators", "Scripts", "Libraries", "Images", "Files", "Include")
-            foreach ($folder in $subFolders) {
+            
+            # Templates directory is one level up, at the root
+            $rootDir = $inst.Path
+            $templatesDir = Join-Path -Path $rootDir -ChildPath "Templates"
+            Create-Directory -Path $templatesDir
+            
+            # Subfolders under MQL4/MQL5 (excluding Templates)
+            $mqlSubFolders = @("Experts", "Indicators", "Scripts", "Libraries", "Images", "Files", "Include")
+            
+            # Create MQL subfolders
+            foreach ($folder in $mqlSubFolders) {
                 $baseFolder = Join-Path -Path $mqlDir -ChildPath $folder
                 $strategySubFolder = Join-Path -Path $baseFolder -ChildPath $StrategyName
                 Create-Directory -Path $strategySubFolder
+                
+                # Add sample files to MQL subfolders
                 if ($inst.Version -eq "MT4") {
-                    if ($folder -eq "Experts") { Set-Content -Path "$strategySubFolder\SampleStrategy.mq4" -Value "// MT4 Expert`nvoid OnTick() { Print('MT4 Running'); }" }
-                    if ($folder -eq "Indicators") { Set-Content -Path "$strategySubFolder\SampleIndicator.mq4" -Value "// MT4 Indicator`n#property indicator_chart_window" }
-                    if ($folder -eq "Scripts") { Set-Content -Path "$strategySubFolder\SampleScript.mq4" -Value "// MT4 Script`nvoid OnStart() { Alert('MT4 Script'); }" }
+                    switch ($folder) {
+                        "Experts" { Set-Content -Path "$strategySubFolder\SampleStrategy.mq4" -Value "// MT4 Expert`nvoid OnTick() { Print('MT4 $StrategyName Running'); }" }
+                        "Indicators" { Set-Content -Path "$strategySubFolder\SampleIndicator.mq4" -Value "// MT4 Indicator`n#property indicator_chart_window" }
+                        "Scripts" { Set-Content -Path "$strategySubFolder\SampleScript.mq4" -Value "// MT4 Script`nvoid OnStart() { Alert('MT4 $StrategyName Script'); }" }
+                        "Libraries" { Set-Content -Path "$strategySubFolder\SampleLibrary.mq4" -Value "// MT4 Library`nvoid SampleFunction() { }" }
+                        "Include" { Set-Content -Path "$strategySubFolder\SampleInclude.mqh" -Value "// MT4 Include`n#define SAMPLE_CONSTANT 1" }
+                        "Files" { Set-Content -Path "$strategySubFolder\SampleFile.txt" -Value "Sample file for $StrategyName" }
+                        "Images" { Set-Content -Path "$strategySubFolder\SampleImage.txt" -Value "Placeholder for image" }
+                    }
                 }
                 if ($inst.Version -eq "MT5") {
-                    if ($folder -eq "Experts") { Set-Content -Path "$strategySubFolder\SampleStrategy.mq5" -Value "// MT5 Expert`nvoid OnTick() { Print('MT5 Running'); }" }
-                    if ($folder -eq "Indicators") { Set-Content -Path "$strategySubFolder\SampleIndicator.mq5" -Value "// MT5 Indicator`n#property indicator_chart_window" }
-                    if ($folder -eq "Scripts") { Set-Content -Path "$strategySubFolder\SampleScript.mq5" -Value "// MT5 Script`nvoid OnStart() { Alert('MT5 Script'); }" }
+                    switch ($folder) {
+                        "Experts" { Set-Content -Path "$strategySubFolder\SampleStrategy.mq5" -Value "// MT5 Expert`nvoid OnTick() { Print('MT5 $StrategyName Running'); }" }
+                        "Indicators" { Set-Content -Path "$strategySubFolder\SampleIndicator.mq5" -Value "// MT5 Indicator`n#property indicator_chart_window" }
+                        "Scripts" { Set-Content -Path "$strategySubFolder\SampleScript.mq5" -Value "// MT5 Script`nvoid OnStart() { Alert('MT5 $StrategyName Script'); }" }
+                        "Libraries" { Set-Content -Path "$strategySubFolder\SampleLibrary.mq5" -Value "// MT5 Library`nvoid SampleFunction() { }" }
+                        "Include" { Set-Content -Path "$strategySubFolder\SampleInclude.mqh" -Value "// MT5 Include`n#define SAMPLE_CONSTANT 1" }
+                        "Files" { Set-Content -Path "$strategySubFolder\SampleFile.txt" -Value "Sample file for $StrategyName" }
+                        "Images" { Set-Content -Path "$strategySubFolder\SampleImage.txt" -Value "Placeholder for image" }
+                    }
                 }
+            }
+            
+            # Create Templates subfolder at root level
+            $templatesSubFolder = Join-Path -Path $templatesDir -ChildPath $StrategyName
+            Create-Directory -Path $templatesSubFolder
+            if ($inst.Version -eq "MT4" -or $inst.Version -eq "MT5") {
+                Set-Content -Path "$templatesSubFolder\SampleTemplate.tpl" -Value "<template><name>$StrategyName Sample</name></template>"
             }
         }
     }
     Write-Status "Strategy folders created for '$StrategyName' with sample files" "Green"
+    Write-Status "Note: In Basic mode, restart MT4/MT5 and compile files in MetaEditor to see Experts/Indicators/Scripts in Navigator. Templates are under Chart > Templates." "Yellow"
+}
+
+function Build-MQLFiles {
+    param ([array]$Installations, [string]$StrategyName)
+    
+    Write-Status "Building MQL files..." "Yellow"
+    
+    # Compile files for each installation
+    foreach ($inst in $Installations) {
+        if ($inst -and $inst.Path) {
+            $mqlDir = Join-Path -Path $inst.Path -ChildPath "MQL$($inst.Version[-1])"
+            if (Test-Path $mqlDir) {
+                Write-Status "Compiling MQL files for $inst.Version in $mqlDir\$StrategyName" "Yellow"
+                
+                # Create temporary src and build directories
+                $tempSrcDir = Join-Path -Path $PSScriptRoot -ChildPath "temp_src"
+                $tempBuildDir = Join-Path -Path $PSScriptRoot -ChildPath "temp_build"
+                Remove-Item -Path $tempSrcDir, $tempBuildDir -Recurse -Force -ErrorAction SilentlyContinue
+                Create-Directory -Path $tempSrcDir
+                Create-Directory -Path $tempBuildDir
+                
+                # Copy MQL files to temp_src
+                $subFolders = @("Experts", "Indicators", "Scripts")
+                foreach ($folder in $subFolders) {
+                    $sourceDir = Join-Path -Path $mqlDir -ChildPath "$folder\$StrategyName"
+                    if (Test-Path $sourceDir) {
+                        Copy-Item -Path "$sourceDir\*.mq*" -Destination $tempSrcDir -Force
+                    }
+                }
+                # Copy include files if they exist
+                $includeDir = Join-Path -Path $mqlDir -ChildPath "Include\$StrategyName"
+                if (Test-Path $includeDir) {
+                    Copy-Item -Path "$includeDir\*.mqh" -Destination $tempSrcDir -Force
+                }
+                
+                # Run build script
+                $buildCommand = if ($inst.Version -eq "MT4") { "build_mt4" } else { "build_mt5" }
+                $buildSubDir = if ($inst.Version -eq "MT4") { "mt4" } else { "mt5" }
+                try {
+                    Push-Location -Path $PSScriptRoot
+                    docker-compose up -d
+                    docker-compose exec -T mt_builder $buildCommand
+                    
+                    # Copy compiled files back to original locations
+                    $compiledDir = Join-Path -Path $tempBuildDir -ChildPath $buildSubDir
+                    if (Test-Path $compiledDir) {
+                        foreach ($folder in $subFolders) {
+                            $targetDir = Join-Path -Path $mqlDir -ChildPath "$folder\$StrategyName"
+                            Create-Directory -Path $targetDir
+                            Copy-Item -Path "$compiledDir\*.ex*" -Destination $targetDir -Force
+                        }
+                        # Copy include files back
+                        $includeTargetDir = Join-Path -Path $mqlDir -ChildPath "Include\$StrategyName"
+                        Create-Directory -Path $includeTargetDir
+                        Copy-Item -Path "$compiledDir\include\*.mqh" -Destination $includeTargetDir -Force -ErrorAction SilentlyContinue
+                    } else {
+                        Write-Status "No compiled files found in $compiledDir" "Red"
+                    }
+                    
+                    docker-compose down
+                    Pop-Location
+                    Write-Status "Successfully compiled MQL files for $inst.Version in $StrategyName" "Green"
+                } catch {
+                    Write-Status "Error compiling MQL files: $_" "Red"
+                    Write-Status "Check Docker logs and build script output for details." "Yellow"
+                    Pop-Location
+                    docker-compose down
+                    return
+                } finally {
+                    Remove-Item -Path $tempSrcDir, $tempBuildDir -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            } else {
+                Write-Status "MQL directory not found at $mqlDir" "Red"
+            }
+        }
+    }
 }
 
 function Setup-Docker {
-    # Placeholder for Docker setup logic
-    Write-Status "Docker setup initiated (not fully implemented yet)" "Yellow"
-    # Future implementation: Docker container creation, linking MT installations, etc.
-    Write-Status "Advanced mode with Docker will be fully implemented in a future update" "Yellow"
+    param ([array]$Installations, [string]$StrategyName)
+    
+    Write-Status "Docker setup initiated for advanced mode" "Yellow"
+    
+    # Check if Docker and Docker Compose are installed
+    try {
+        $dockerVersion = docker --version
+        Write-Status "Docker found: $dockerVersion" "Green"
+    } catch {
+        Write-Status "Docker is not installed. Please install Docker Desktop and restart this script." "Red"
+        Write-Status "Download Docker: https://www.docker.com/products/docker-desktop/" "Yellow"
+        return
+    }
+    try {
+        $composeVersion = docker-compose --version
+        Write-Status "Docker Compose found: $composeVersion" "Green"
+    } catch {
+        Write-Status "Docker Compose is not installed. Please install it and restart this script." "Red"
+        Write-Status "See: https://docs.docker.com/compose/install/" "Yellow"
+        return
+    }
+    
+    # Ensure required files exist
+    $composeFile = Join-Path -Path $PSScriptRoot -ChildPath "docker-compose.yml"
+    $dockerFile = Join-Path -Path $PSScriptRoot -ChildPath "Dockerfile"
+    $buildMt4Script = Join-Path -Path $PSScriptRoot -ChildPath "scripts/build_mt4.sh"
+    $buildMt5Script = Join-Path -Path $PSScriptRoot -ChildPath "scripts/build_mt5.sh"
+    if (-not (Test-Path $composeFile) -or -not (Test-Path $dockerFile) -or -not (Test-Path $buildMt4Script) -or -not (Test-Path $buildMt5Script)) {
+        Write-Status "Missing required files (docker-compose.yml, Dockerfile, or build scripts) in $PSScriptRoot" "Red"
+        Write-Status "Please ensure all files are present." "Yellow"
+        return
+    }
+    
+    # Build the Docker image
+    Write-Status "Building Docker image for mt_builder..." "Yellow"
+    try {
+        Push-Location -Path $PSScriptRoot
+        docker-compose build
+        Pop-Location
+    } catch {
+        Write-Status "Failed to build Docker image: $_" "Red"
+        Pop-Location
+        return
+    }
+    
+    # Call Build-MQLFiles to compile the files
+    Build-MQLFiles -Installations $Installations -StrategyName $StrategyName
+    
+    Write-Status "Docker-based compilation complete. Restart MT4/MT5 to see compiled files in the Navigator." "Green"
 }
 
 # Main Setup
@@ -144,8 +297,11 @@ if ($installations.Count -eq 0) {
     exit 1
 }
 
+# Always setup strategy folders to ensure consistent structure and files for both modes
+Setup-Strategy-Folders -Installations $installations -StrategyName $StrategyName
+
 if (-not $SkipDocker) {
-    Setup-Docker
+    Setup-Docker -Installations $installations -StrategyName $StrategyName
     if ($DevEnvironmentName) {
         Write-Status "Setting up dev environment '$DevEnvironmentName' with Docker (placeholder)" "Yellow"
         # Future: Setup-Environment -Path $Config.DevPath -Name $DevEnvironmentName -Installations $installations -Type "Dev"
@@ -154,9 +310,8 @@ if (-not $SkipDocker) {
         Write-Status "Setting up test environment '$TestEnvironmentName' with Docker (placeholder)" "Yellow"
         # Future: Setup-Environment -Path $Config.TestPath -Name $TestEnvironmentName -Installations $installations -Type "Test"
     }
-    Write-Status "Advanced mode selected: Docker setup initiated (partial implementation)" "Yellow"
+    Write-Status "Advanced mode selected: Docker setup and compilation completed" "Green"
 } else {
-    Setup-Strategy-Folders -Installations $installations -StrategyName $StrategyName
     Write-Status "Basic mode: Collection of $CollectionName strategies setup complete" "Yellow"
 }
 

@@ -39,4 +39,4 @@ done
 mkdir -p "$BUILD_OUTPUT_DIR/include"
 find . -type f -name "*.mqh" -exec cp {} "$BUILD_OUTPUT_DIR/include/" \;
 
-echo "MT5 build complete. Output in $BUILD_OUTPUT_DIR"
+echo "MT5 build complete. Output in $BUILD_OUTPUT_DIR"s
