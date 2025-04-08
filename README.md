@@ -10,6 +10,7 @@ The MT Trading Framework provides a structured environment for algorithmic tradi
 - **Containerized Environments**: Isolated, portable MetaTrader installations
 - **Version Control**: Git integration with appropriate settings for MQL projects
 - **Workflow Automation**: Scripts for common development tasks
+- **Dual User Levels**: Basic mode (no Docker) and Advanced mode (with Docker)
 - **Docker Support**: Advanced containerization for consistent builds (optional)
 
 ## Features
@@ -19,6 +20,7 @@ The MT Trading Framework provides a structured environment for algorithmic tradi
 - **Portable Installations**: Self-contained MetaTrader environments
 - **Strategy Collections**: Organize related strategies into logical groups
 - **Git LFS Integration**: Proper handling of binary files in version control
+- **Flexible User Levels**: Choose between Basic mode (no Docker) and Advanced mode (with Docker)
 - **Docker-Based Compilation**: Consistent builds across environments (advanced mode)
 - **Automatic File Organization**: Structured folders for all trading components
 
@@ -47,10 +49,14 @@ The MT Trading Framework provides a structured environment for algorithmic tradi
 3. Follow the prompts to configure your environment:
    - Select MetaTrader version (MT4, MT5, or both)
    - Enter broker names
-   - Choose setup mode (Basic or Advanced)
+   - Choose setup mode:
+     - **Basic Mode**: No Docker required, simpler setup
+     - **Advanced Mode**: Uses Docker for consistent compilation (requires Docker Desktop)
    - Name your collection and strategy
 
 4. After setup completes, use the created desktop shortcuts to access your MetaTrader environments
+
+See [User Levels](docs/user-levels.md) for a detailed comparison between Basic and Advanced modes.
 
 ### Directory Structure
 
@@ -155,6 +161,23 @@ Initialize Git with proper MetaTrader settings:
 
 ## Advanced Configuration
 
+### User Levels
+
+The framework supports two user levels:
+
+- **Basic Mode**: No Docker required, uses MetaTrader's native compiler
+- **Advanced Mode**: Docker-based compilation for consistency across environments
+
+To switch between modes:
+
+```powershell
+# For Basic Mode
+.\Easy-Setup.ps1  # Then select option 1 when prompted
+
+# For Advanced Mode
+.\Easy-Setup.ps1  # Then select option 2 when prompted
+```
+
 ### Multiple Broker Support
 
 The framework supports multiple brokers simultaneously:
@@ -200,6 +223,7 @@ If you encounter issues:
 
 Additional documentation:
 
+- [User Levels](docs/user-levels.md) - Comparison between Basic and Advanced modes
 - [Basic User Guide](docs/basic-user-guide.md) - Guide for users without Docker
 - [Advanced User Guide](docs/advanced-user-guide.md) - Docker-based workflow
 - [Script Reference](docs/script-reference.md) - Detailed script parameters
