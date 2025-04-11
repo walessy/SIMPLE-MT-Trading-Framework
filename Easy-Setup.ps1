@@ -68,7 +68,7 @@ $params = @{
     MT5Path = $mt5Path
     SkipDocker = $skipDocker
     StrategyName = $strategyName
-    CollectionName = $collectionName  # Pass the collection name
+    CollectionName = $collectionName
 }
 
 # Run MTSetup.ps1 using absolute path
@@ -84,5 +84,5 @@ try {
     Write-Host "Error during setup: $_" -ForegroundColor Red
     exit 1
 }
-
-Write-Host "`nSetup finished. Check your desktop for shortcuts and $params.BasePath for the framework." -ForegroundColor Green
+BuiWrite-Host "`nSetup finished. Check your desktop for shortcuts and $params.BasePath for the framework." -ForegroundColor Green
+Write-Host "Run BuildManager.ps1 to launch the build manager GUI." -ForegroundColor Yellow
