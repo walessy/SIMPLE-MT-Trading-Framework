@@ -1,0 +1,32 @@
+{
+    "StrategyCollections":  [
+                                {
+                                    "Platforms":  [
+                                                      {
+                                                          "ExplicitPath":  "",
+                                                          "Environments":  [
+                                                                               "Dev",
+                                                                               "Test",
+                                                                               "Deploy"
+                                                                           ],
+                                                          "Platform":  "MT4",
+                                                          "BrokerName":  "afterprime"
+                                                      },
+                                                      {
+                                                          "ExplicitPath":  "",
+                                                          "Environments":  [
+                                                                               "Dev",
+                                                                               "Test",
+                                                                               "Deploy"
+                                                                           ],
+                                                          "Platform":  "MT5",
+                                                          "BrokerName":  "afterprime"
+                                                      }
+                                                  ],
+                                    "SkipDocker":  true,
+                                    "CollectionName":  "coll1",
+                                    "StrategyName":  "DefaultStrategy"
+                                }
+                            ],
+    "BasePath":  "C:\\Trading\\MTFramework"
+}

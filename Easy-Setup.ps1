@@ -1,88 +1,54 @@
-# Easy-Setup.ps1
-# Simple Setup Script for MT Trading Framework
+Write-Host "Welcome to the SIMPLE MT-Trading-Framework Setup Wizard" -ForegroundColor Cyan
 
 # Ensure script runs from its own directory
 Set-Location -Path $PSScriptRoot
 
-Write-Host "Welcome to the MT Trading Framework Setup" -ForegroundColor Cyan
-Write-Host "Please run this script as Administrator for full functionality.`n"
+$setupFile = Join-Path -Path $PSScriptRoot -ChildPath "setup.json"
 
-# Prompt for MetaTrader version
-Write-Host "Select MetaTrader version to install:" -ForegroundColor Yellow
-Write-Host "1. MT4 Only"
-Write-Host "2. MT5 Only"
-Write-Host "3. Both MT4 and MT5"
-$versionChoice = Read-Host "Enter your choice (1-3)"
-
-$skipMT4 = $false
-$skipMT5 = $false
-switch ($versionChoice) {
-    "1" { $skipMT5 = $true }
-    "2" { $skipMT4 = $true }
-    "3" { } # Both MT4 and MT5
-    default { Write-Host "Invalid choice. Defaulting to both MT4 and MT5." -ForegroundColor Red }
-}
-
-# Prompt for broker names
-if (-not $skipMT4) {
-    $mt4Broker = Read-Host "Enter MT4 broker name (e.g., AfterPrime)"
-    if ([string]::IsNullOrWhiteSpace($mt4Broker)) { $mt4Broker = "Default" }
-} else {
-    $mt4Broker = "Default"
-}
-
-if (-not $skipMT5) {
-    $mt5Broker = Read-Host "Enter MT5 broker name (e.g., AfterPrime)"
-    if ([string]::IsNullOrWhiteSpace($mt5Broker)) { $mt5Broker = "Default" }
-} else {
-    $mt5Broker = "Default"
-}
-
-# Prompt for explicit paths (optional)
-$mt4Path = Read-Host "Enter explicit MT4 installation path (optional, press Enter to auto-detect)"
-$mt5Path = Read-Host "Enter explicit MT5 installation path (optional, press Enter to auto-detect)"
-
-# Prompt for setup mode
-Write-Host "`nSelect setup mode:" -ForegroundColor Yellow
-Write-Host "1. Basic (Install MT4/MT5 only)"
-Write-Host "2. Advanced (Include build environment with Docker)"
-$modeChoice = Read-Host "Enter your choice (1-2)"
-$skipDocker = $modeChoice -ne "2"
-
-# Prompt for collection name
-$collectionName = Read-Host "Enter collection name (e.g., coll)"
-if ([string]::IsNullOrWhiteSpace($collectionName)) { $collectionName = "DefaultCollection" }
-
-# Prompt for strategy name
-$strategyName = Read-Host "Enter strategy name (e.g., Amos)"
-if ([string]::IsNullOrWhiteSpace($strategyName)) { $strategyName = "DefaultStrategy" }
-
-# Construct parameters for MTSetup.ps1
-$params = @{
-    BasePath = "C:\Trading\MTFramework"
-    SkipMT4 = $skipMT4
-    SkipMT5 = $skipMT5
-    MT4BrokerName = $mt4Broker
-    MT5BrokerName = $mt5Broker
-    MT4Path = $mt4Path
-    MT5Path = $mt5Path
-    SkipDocker = $skipDocker
-    StrategyName = $strategyName
-    CollectionName = $collectionName
-}
-
-# Run MTSetup.ps1 using absolute path
-$mtSetupPath = Join-Path -Path $PSScriptRoot -ChildPath "MTSetup.ps1"
-Write-Host "`nStarting setup..." -ForegroundColor Cyan
-try {
-    if (Test-Path $mtSetupPath) {
-        & $mtSetupPath @params
-    } else {
-        throw "MTSetup.ps1 not found in $PSScriptRoot"
+# Check if setup.json exists
+if (Test-Path $setupFile) {
+    $useExisting = Read-Host "A setup.json file already exists at $setupFile.`nDo you want to use the existing setup.json to set up the environment? (y/n)"
+    if ($useExisting -eq "y") {
+        Write-Host "Using existing setup.json to set up the environment..." -ForegroundColor Green
+        try {
+            # Run MTSetup.ps1 and capture output/errors
+            $result = powershell.exe -File .\MTSetup.ps1 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "MTSetup.ps1 failed: $result"
+            }
+            Write-Host "Setup completed using existing setup.json." -ForegroundColor Green
+        } catch {
+            Write-Host "Failed to run MTSetup.ps1 with existing setup: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "Full error details: $result" -ForegroundColor Red
+            exit
+        }
+        exit
     }
-} catch {
-    Write-Host "Error during setup: $_" -ForegroundColor Red
-    exit 1
 }
-BuiWrite-Host "`nSetup finished. Check your desktop for shortcuts and $params.BasePath for the framework." -ForegroundColor Green
-Write-Host "Run BuildManager.ps1 to launch the build manager GUI." -ForegroundColor Yellow
+
+# Prompt for cleanup
+$cleanupChoice = Read-Host "Would you like to clean up the existing setup before proceeding? (y/n)"
+if ($cleanupChoice -eq "y") {
+    Write-Host "Running cleanup..." -ForegroundColor Yellow
+    $collectionName = Read-Host "Enter Collection Name for cleanup (default: coll1)"
+    if (-not $collectionName) { $collectionName = "coll1" }
+    $strategyName = Read-Host "Enter Strategy Name for cleanup (default: DefaultStrategy)"
+    if (-not $strategyName) { $strategyName = "DefaultStrategy" }
+    
+    try {
+        powershell.exe -File .\Cleanup.ps1 -CollectionName $collectionName -StrategyName $strategyName
+    } catch {
+        Write-Host "Cleanup failed: $($_.Exception.Message)" -ForegroundColor Red
+        exit
+    }
+}
+
+# Generate new setup
+Write-Host "Generating new setup..." -ForegroundColor Yellow
+try {
+    powershell.exe -File .\MTSetup.ps1 -GenerateSetup
+    Write-Host "Setup process completed." -ForegroundColor Green
+} catch {
+    Write-Host "Failed to generate new setup: $($_.Exception.Message)" -ForegroundColor Red
+    exit
+}

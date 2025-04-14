@@ -1,15 +1,6 @@
 [CmdletBinding()]
 param (
-    [string]$BasePath = "C:\Trading\MTFramework",
-    [switch]$SkipMT4,
-    [switch]$SkipMT5,
-    [string]$MT4BrokerName = "Default",
-    [string]$MT5BrokerName = "Default",
-    [string]$MT4Path = "",
-    [string]$MT5Path = "",
-    [switch]$SkipDocker,
-    [string]$StrategyName,
-    [string]$CollectionName
+    [switch]$GenerateSetup
 )
 
 # Ensure script runs from its own directory
@@ -18,552 +9,255 @@ Set-Location -Path $PSScriptRoot
 # Helper Functions
 function Write-Status { param ([string]$Message, [string]$Color = "Yellow") Write-Host $Message -ForegroundColor $Color }
 function Create-Directory { param ([string]$Path) if (-not (Test-Path $Path)) { New-Item -Path $Path -ItemType Directory -Force | Out-Null; Write-Status "Created: $Path" "Green" } }
-
 function Create-Shortcut {
-    param ([string]$TargetPath, [string]$ShortcutName, [string]$Arguments = "", [string]$BrokerName)
-    $desktopPath = [System.Environment]::GetFolderPath("Desktop")
-    $brokerFolder = Join-Path -Path $desktopPath -ChildPath $BrokerName
-    Create-Directory -Path $brokerFolder
-    $shortcutFile = Join-Path -Path $brokerFolder -ChildPath "$ShortcutName.lnk"
-    $WshShell = New-Object -ComObject WScript.Shell
-    $Shortcut = $WshShell.CreateShortcut($shortcutFile)
-    $Shortcut.TargetPath = $TargetPath
-    if ($TargetPath -match "terminal(64)?\.exe$" -and -not $Arguments.Contains("/portable")) { $Arguments = "$Arguments /portable".Trim() }
-    if ($Arguments) { $Shortcut.Arguments = $Arguments }
-    $Shortcut.WorkingDirectory = Split-Path -Path $TargetPath -Parent
-    $Shortcut.Save()
-    Write-Status "Created shortcut: $ShortcutName in $BrokerName folder" "Green"
+    param ([string]$TargetPath, [string]$ShortcutPath, [string]$Description)
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($ShortcutPath)
+        $shortcut.TargetPath = $TargetPath
+        $shortcut.Description = $Description
+        $shortcut.Save()
+        Write-Status "Created shortcut: $ShortcutPath" "Green"
+    } catch {
+        Write-Status "Failed to create shortcut at $ShortcutPath. Error: $($_.Exception.Message)" "Red"
+    }
 }
-
 function Install-MetaTrader {
-    param ([string]$Version, [string]$BrokerName, [string]$CollectionName, [string]$RootPath, [string]$EnvironmentName, [string]$ExplicitPath = "")
-    $exe = if ($Version -eq "MT4") { "terminal.exe" } else { "terminal64.exe" }
-    $brokerPath = Join-Path -Path $RootPath -ChildPath $BrokerName
-    $collectionPath = Join-Path -Path $brokerPath -ChildPath $CollectionName
-    $envPath = Join-Path -Path $collectionPath -ChildPath $EnvironmentName
-    $platformPath = Join-Path -Path $envPath -ChildPath $Version
-    Create-Directory -Path $platformPath
-    $terminalPath = Join-Path -Path $platformPath -ChildPath $exe
-
-    if (Test-Path $terminalPath) { 
-        Write-Status "$Version for $BrokerName (collection: $CollectionName, env: $EnvironmentName) already exists at $platformPath" "Yellow"
-        return @{ Version = $Version; BrokerName = $BrokerName; CollectionName = $CollectionName; EnvironmentName = $EnvironmentName; Path = $platformPath; Terminal = $terminalPath }
-    }
-    
-    $sourcePath = if ($ExplicitPath -and (Test-Path $ExplicitPath)) { $ExplicitPath } else {
-        $paths = @("${env:ProgramFiles(x86)}\*$BrokerName*", "${env:ProgramFiles}\*$BrokerName*") | 
-                 ForEach-Object { Get-ChildItem -Path $_ -Directory -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName }
-        $paths | Where-Object { Test-Path (Join-Path -Path $_ -ChildPath $exe) } | Select-Object -First 1
-    }
-    
-    if (-not $sourcePath) { 
-        Write-Status "$Version for $BrokerName not found. Please install it first or provide an explicit path." "Red"
-        return $null
-    }
-    
-    robocopy "$sourcePath" "$platformPath" /E /XJ /R:2 /W:1 /NFL /NDL
-    if (Test-Path $terminalPath) {
-        Set-Content -Path (Join-Path -Path $platformPath -ChildPath "origin.ini") -Value "[Common]`r`nPortable=1"
-        Write-Status "$Version containerized for $BrokerName (collection: $CollectionName, env: $EnvironmentName) at $platformPath" "Green"
-        return @{ Version = $Version; BrokerName = $BrokerName; CollectionName = $CollectionName; EnvironmentName = $EnvironmentName; Path = $platformPath; Terminal = $terminalPath }
-    }
-    Write-Status "Failed to containerize $Version for $BrokerName (collection: $CollectionName, env: $EnvironmentName)" "Red"
-    return $null
-}
-
-function Setup-Strategy-Folders {
-    param ([array]$Installations, [string]$StrategyName)
-    if (-not $Installations -or $Installations.Count -eq 0) { 
-        Write-Status "No valid installations provided for strategy setup" "Yellow"
-        return
-    }
-    
-    foreach ($inst in $Installations) {
-        if ($inst -and $inst.Path) {
-            $mqlDir = Join-Path -Path $inst.Path -ChildPath "MQL$($inst.Version[-1])"
-            Create-Directory -Path $mqlDir
-            $rootDir = $inst.Path
-            $templatesDir = Join-Path -Path $rootDir -ChildPath "Templates"
-            Create-Directory -Path $templatesDir
-            
-            $mqlSubFolders = @("Experts", "Indicators", "Scripts", "Libraries", "Images", "Files", "Include")
-            foreach ($folder in $mqlSubFolders) {
-                $baseFolder = Join-Path -Path $mqlDir -ChildPath $folder
-                $strategySubFolder = Join-Path -Path $baseFolder -ChildPath $StrategyName
-                Create-Directory -Path $strategySubFolder
-                
-                if ($inst.Version -eq "MT4") {
-                    switch ($folder) {
-                        "Experts" { Set-Content -Path "$strategySubFolder\SampleStrategy.mq4" -Value "// MT4 Expert`nvoid OnTick() { Print('MT4 $StrategyName Running'); }" }
-                        "Indicators" { Set-Content -Path "$strategySubFolder\SampleIndicator.mq4" -Value "// MT4 Indicator`n#property indicator_chart_window" }
-                        "Scripts" { Set-Content -Path "$strategySubFolder\SampleScript.mq4" -Value "// MT4 Script`nvoid OnStart() { Alert('MT4 $StrategyName Script'); }" }
-                        "Libraries" { Set-Content -Path "$strategySubFolder\SampleLibrary.mq4" -Value "// MT4 Library`nvoid SampleFunction() { }" }
-                        "Include" { Set-Content -Path "$strategySubFolder\SampleInclude.mqh" -Value "// MT4 Include`n#define SAMPLE_CONSTANT 1" }
-                        "Files" { Set-Content -Path "$strategySubFolder\SampleFile.txt" -Value "Sample file for $StrategyName" }
-                        "Images" { Set-Content -Path "$strategySubFolder\SampleImage.txt" -Value "Placeholder for image" }
-                    }
-                }
-                if ($inst.Version -eq "MT5") {
-                    switch ($folder) {
-                        "Experts" { Set-Content -Path "$strategySubFolder\SampleStrategy.mq5" -Value "// MT5 Expert`nvoid OnTick() { Print('MT5 $StrategyName Running'); }" }
-                        "Indicators" { Set-Content -Path "$strategySubFolder\SampleIndicator.mq5" -Value "// MT5 Indicator`n#property indicator_chart_window" }
-                        "Scripts" { Set-Content -Path "$strategySubFolder\SampleScript.mq5" -Value "// MT5 Script`nvoid OnStart() { Alert('MT5 $StrategyName Script'); }" }
-                        "Libraries" { Set-Content -Path "$strategySubFolder\SampleLibrary.mq5" -Value "// MT5 Library`nvoid SampleFunction() { }" }
-                        "Include" { Set-Content -Path "$strategySubFolder\SampleInclude.mqh" -Value "// MT5 Include`n#define SAMPLE_CONSTANT 1" }
-                        "Files" { Set-Content -Path "$strategySubFolder\SampleFile.txt" -Value "Sample file for $StrategyName" }
-                        "Images" { Set-Content -Path "$strategySubFolder\SampleImage.txt" -Value "Placeholder for image" }
-                    }
-                }
-            }
-            
-            $templatesSubFolder = Join-Path -Path $templatesDir -ChildPath $StrategyName
-            Create-Directory -Path $templatesSubFolder
-            if ($inst.Version -eq "MT4" -or $inst.Version -eq "MT5") {
-                Set-Content -Path "$templatesSubFolder\SampleTemplate.tpl" -Value "<template><name>$StrategyName Sample</name></template>"
-            }
-        }
-    }
-    Write-Status "Strategy folders created for '$StrategyName' with sample files" "Green"
-    Write-Status "Note: In Basic mode, restart MT4/MT5 and compile files in MetaEditor to see Experts/Indicators/Scripts in Navigator. Templates are under Chart > Templates." "Yellow"
-}
-
-function Build-MQLFiles {
-    param ([array]$Installations, [string]$StrategyName)
-    
-    Write-Status "Building MQL files..." "Yellow"
-    
-    foreach ($inst in $Installations) {
-        if ($inst -and $inst.Path) {
-            $mqlDir = Join-Path -Path $inst.Path -ChildPath "MQL$($inst.Version[-1])"
-            if (Test-Path $mqlDir) {
-                Write-Status "Compiling MQL files for $inst.Version in $mqlDir\$StrategyName" "Yellow"
-                
-                $tempSrcDir = Join-Path -Path $PSScriptRoot -ChildPath "temp_src"
-                $tempBuildDir = Join-Path -Path $PSScriptRoot -ChildPath "temp_build"
-                Remove-Item -Path $tempSrcDir, $tempBuildDir -Recurse -Force -ErrorAction SilentlyContinue
-                Create-Directory -Path $tempSrcDir
-                Create-Directory -Path $tempBuildDir
-                
-                $subFolders = @("Experts", "Indicators", "Scripts")
-                foreach ($folder in $subFolders) {
-                    $sourceDir = Join-Path -Path $mqlDir -ChildPath "$folder\$StrategyName"
-                    if (Test-Path $sourceDir) {
-                        Copy-Item -Path "$sourceDir\*.mq*" -Destination $tempSrcDir -Force
-                    }
-                }
-                $includeDir = Join-Path -Path $mqlDir -ChildPath "Include\$StrategyName"
-                if (Test-Path $includeDir) {
-                    Copy-Item -Path "$includeDir\*.mqh" -Destination $tempSrcDir -Force
-                }
-                
-                $buildCommand = if ($inst.Version -eq "MT4") { "build_mt4" } else { "build_mt5" }
-                $buildSubDir = if ($inst.Version -eq "MT4") { "mt4" } else { "mt5" }
-                try {
-                    Push-Location -Path $PSScriptRoot
-                    docker-compose up -d
-                    docker-compose exec -T mt_builder $buildCommand
-                    
-                    $compiledDir = Join-Path -Path $tempBuildDir -ChildPath $buildSubDir
-                    if (Test-Path $compiledDir) {
-                        foreach ($folder in $subFolders) {
-                            $targetDir = Join-Path -Path $mqlDir -ChildPath "$folder\$StrategyName"
-                            Create-Directory -Path $targetDir
-                            Copy-Item -Path "$compiledDir\*.ex*" -Destination $targetDir -Force
-                        }
-                        $includeTargetDir = Join-Path -Path $mqlDir -ChildPath "Include\$StrategyName"
-                        Create-Directory -Path $includeTargetDir
-                        Copy-Item -Path "$compiledDir\include\*.mqh" -Destination $includeTargetDir -Force -ErrorAction SilentlyContinue
-                    } else {
-                        Write-Status "No compiled files found in $compiledDir" "Red"
-                    }
-                    
-                    docker-compose down
-                    Pop-Location
-                    Write-Status "Successfully compiled MQL files for $inst.Version in $StrategyName" "Green"
-                } catch {
-                    Write-Status "Error compiling MQL files: $_" "Red"
-                    Write-Status "Check Docker logs and build script output for details." "Yellow"
-                    Pop-Location
-                    docker-compose down
-                    return
-                } finally {
-                    Remove-Item -Path $tempSrcDir, $tempBuildDir -Recurse -Force -ErrorAction SilentlyContinue
-                }
+    param ([string]$Version, [string]$BrokerName, [string]$CollectionName, [string]$EnvironmentName, [string]$ExplicitPath, [string]$StrategyName)
+    try {
+        $basePath = "C:\Trading\MTFramework"
+        $installPath = Join-Path -Path $basePath -ChildPath "$Version\$BrokerName\$CollectionName\$EnvironmentName\$Version"
+        Create-Directory -Path $installPath
+        $terminalName = if ($Version -eq "MT4") { "terminal.exe" } else { "terminal64.exe" }
+        $sourceFolder = if ($ExplicitPath) {
+            Split-Path -Path $ExplicitPath -Parent
+        } else {
+            $progFiles = if ([Environment]::Is64BitOperatingSystem) { "C:\Program Files (x86)" } else { "C:\Program Files" }
+            $brokerFolder = Get-ChildItem -Path $progFiles -Directory | Where-Object { $_.Name -like "*$BrokerName*" } | Select-Object -First 1
+            if ($brokerFolder) {
+                $brokerFolder.FullName
             } else {
-                Write-Status "MQL directory not found at $mqlDir" "Red"
+                Join-Path -Path $progFiles -ChildPath $BrokerName
             }
         }
+        if (Test-Path $sourceFolder) {
+            Copy-Item -Path "$sourceFolder\*" -Destination $installPath -Recurse -Force
+            $terminalPath = Join-Path -Path $installPath -ChildPath $terminalName
+            if (Test-Path $terminalPath) {
+                Write-Status "Installed $Version for $BrokerName in $EnvironmentName at $installPath" "Green"
+            } else {
+                Write-Status "Warning: $terminalName not found in $sourceFolder" "Yellow"
+            }
+        } else {
+            Write-Status "$Version installation not found at $sourceFolder. Please install MetaTrader or specify an explicit path." "Yellow"
+        }
+        $desktopPath = [System.Environment]::GetFolderPath("Desktop")
+        $brokerFolder = Join-Path -Path $desktopPath -ChildPath $BrokerName
+        Create-Directory -Path $brokerFolder
+        $shortcutPath = Join-Path -Path $brokerFolder -ChildPath "$Version - $BrokerName [$CollectionName-$StrategyName] $EnvironmentName.lnk"
+        $targetShortcutPath = Join-Path -Path $installPath -ChildPath $terminalName
+        Create-Shortcut -TargetPath $targetShortcutPath -ShortcutPath $shortcutPath -Description "$Version $EnvironmentName"
+        return @{ Version = $Version; BrokerName = $BrokerName; CollectionName = $CollectionName; EnvironmentName = $EnvironmentName; Path = $installPath; Terminal = $targetShortcutPath }
+    } catch {
+        Write-Status "Failed to install $Version for $BrokerName in $EnvironmentName. Error: $($_.Exception.Message)" "Red"
+        throw
     }
 }
-
-function Setup-Docker {
-    param ([array]$Installations, [string]$StrategyName)
-    
-    Write-Status "Docker setup initiated for advanced mode" "Yellow"
-    
+function Setup-Strategy-Folders {
+    param ([string]$InstallPath, [string]$Version, [string]$StrategyName)
     try {
-        $dockerVersion = docker --version
-        Write-Status "Docker found: $dockerVersion" "Green"
+        $mqlFolder = Join-Path -Path $InstallPath -ChildPath "MQL$($Version[-1])"
+        Create-Directory -Path $mqlFolder
+        $folders = @("Experts", "Indicators", "Scripts", "Include", "Libraries")
+        foreach ($folder in $folders) {
+            $path = Join-Path -Path $mqlFolder -ChildPath "$folder\$StrategyName"
+            Create-Directory -Path $path
+            if ($folder -eq "Experts") {
+                $ext = if ($Version -eq "MT4") { "mq4" } else { "mq5" }
+                $filePath = Join-Path -Path $path -ChildPath "SampleStrategy.$ext"
+                "#property copyright 'xAI'\nvoid OnTick() { Print('Hello from $StrategyName'); }" | Set-Content -Path $filePath
+                Write-Status "Created: $filePath" "Green"
+            }
+        }
     } catch {
-        Write-Status "Docker is not installed. Please install Docker Desktop and restart this script." "Red"
-        Write-Status "Download Docker: https://www.docker.com/products/docker-desktop/" "Yellow"
-        return
+        Write-Status "Failed to setup strategy folders for $Version at $InstallPath. Error: $($_.Exception.Message)" "Red"
+        throw
     }
-    try {
-        $composeVersion = docker-compose --version
-        Write-Status "Docker Compose found: $composeVersion" "Green"
-    } catch {
-        Write-Status "Docker Compose is not installed. Please install it and restart this script." "Red"
-        Write-Status "See: https://docs.docker.com/compose/install/" "Yellow"
-        return
-    }
-    
-    $composeFile = Join-Path -Path $PSScriptRoot -ChildPath "docker-compose.yml"
-    $dockerFile = Join-Path -Path $PSScriptRoot -ChildPath "Dockerfile"
-    $buildMt4Script = Join-Path -Path $PSScriptRoot -ChildPath "scripts/build_mt4.sh"
-    $buildMt5Script = Join-Path -Path $PSScriptRoot -ChildPath "scripts/build_mt5.sh"
-    if (-not (Test-Path $composeFile) -or -not (Test-Path $dockerFile) -or -not (Test-Path $buildMt4Script) -or -not (Test-Path $buildMt5Script)) {
-        Write-Status "Missing required files (docker-compose.yml, Dockerfile, or build scripts) in $PSScriptRoot" "Red"
-        Write-Status "Please ensure all files are present." "Yellow"
-        return
-    }
-    
-    Write-Status "Building Docker image for mt_builder..." "Yellow"
-    try {
-        Push-Location -Path $PSScriptRoot
-        docker-compose build
-        Pop-Location
-    } catch {
-        Write-Status "Failed to build Docker image: $_" "Red"
-        Pop-Location
-        return
-    }
-    
-    Build-MQLFiles -Installations $Installations -StrategyName $StrategyName
-    
-    Write-Status "Docker-based compilation complete. Restart MT4/MT5 to see compiled files in the Navigator." "Green"
 }
-
 function Sync-CompiledFiles {
     param (
-        [string]$DevPath,
-        [string]$TestPath,
-        [string]$DeployPath,
-        [string]$PackagePath,
-        [string]$MT4Path,
-        [string]$MT5Path,
-        [string]$CollectionName,
-        [string]$StrategyName
+        [string]$MT4DevPath, [string]$MT4TestPath, [string]$MT4DeployPath, [string]$MT4PackagePath,
+        [string]$MT5DevPath, [string]$MT5TestPath, [string]$MT5DeployPath, [string]$MT5PackagePath,
+        [string]$CollectionName, [string]$StrategyName
     )
-
-    Write-Status "Syncing compiled files to environments..." "Yellow"
-    $foundFiles = $false
-
-    if (Test-Path $MT4Path) {
-        Write-Status "Syncing MT4 files from $MT4Path..." "Yellow"
-        $mt4DevBuildDir = Join-Path -Path $DevPath -ChildPath "MT4"
-        $mt4TestBuildDir = Join-Path -Path $TestPath -ChildPath "MT4"
-        $mt4DeployDir = Join-Path -Path $DeployPath -ChildPath "MT4"
-        $mt4PackageDir = Join-Path -Path $PackagePath -ChildPath "MT4\$CollectionName\$StrategyName"
-
-        Create-Directory -Path $mt4DevBuildDir
-        Create-Directory -Path $mt4TestBuildDir
-        Create-Directory -Path $mt4DeployDir
-        Create-Directory -Path $mt4PackageDir
-
-        Get-ChildItem -Path $MT4Path -Directory | ForEach-Object {
-            $brokerDir = $_.FullName
-            $mql4Dir = Join-Path -Path $brokerDir -ChildPath "MQL4"
-            if (Test-Path $mql4Dir) {
-                Write-Status "Checking MQL4 directory: $mql4Dir" "Cyan"
-                foreach ($folder in @("Experts", "Indicators", "Scripts")) {
-                    $sourceDir = Join-Path -Path $mql4Dir -ChildPath "$folder\$StrategyName"
-                    Write-Status "Looking for compiled files in $sourceDir..." "Cyan"
-                    if (Test-Path $sourceDir) {
-                        $compiledFiles = Get-ChildItem -Path $sourceDir -File -Filter "*.ex4" -ErrorAction SilentlyContinue
-                        if ($compiledFiles) {
-                            foreach ($file in $compiledFiles) {
-                                Write-Status "Copying MT4 $folder file: $($file.Name) from $sourceDir" "Green"
-                                $targetDevDir = Join-Path -Path $mt4DevBuildDir -ChildPath "MQL4\$folder\$StrategyName"
-                                $targetTestDir = Join-Path -Path $mt4TestBuildDir -ChildPath "MQL4\$folder\$StrategyName"
-                                $targetDeployDir = Join-Path -Path $mt4DeployDir -ChildPath "MQL4\$folder\$StrategyName"
-                                Create-Directory -Path $targetDevDir
-                                Create-Directory -Path $targetTestDir
-                                Create-Directory -Path $targetDeployDir
-                                Copy-Item -Path $file.FullName -Destination $targetDevDir -Force
-                                Copy-Item -Path $file.FullName -Destination $targetTestDir -Force
-                                Copy-Item -Path $file.FullName -Destination $targetDeployDir -Force
-                                Copy-Item -Path $file.FullName -Destination (Join-Path -Path $mt4PackageDir -ChildPath "$folder") -Force
-                                $foundFiles = $true
-                            }
-                        } else {
-                            Write-Status "No compiled .ex4 files found in $sourceDir" "Yellow"
-                        }
-                    } else {
-                        Write-Status "Directory $sourceDir does not exist" "Red"
-                    }
+    try {
+        $types = @("Experts", "Indicators", "Scripts")
+        foreach ($type in $types) {
+            if ($MT4DevPath) {
+                $sourceMT4 = Join-Path -Path $MT4DevPath -ChildPath "MT4\MQL4"
+                $mt4Files = Get-ChildItem -Path "$sourceMT4\$type\$StrategyName\*.ex4" -ErrorAction SilentlyContinue
+                foreach ($file in $mt4Files) {
+                    Write-Status "Copying $type file: $($file.Name) to environments" "Green"
+                    Copy-Item -Path $file.FullName -Destination "$MT4DevPath\MQL4\$type\$StrategyName" -Force
+                    Copy-Item -Path $file.FullName -Destination "$MT4TestPath\MQL4\$type\$StrategyName" -Force
+                    Copy-Item -Path $file.FullName -Destination "$MT4DeployPath\MQL4\$type\$StrategyName" -Force
+                    Copy-Item -Path $file.FullName -Destination "$MT4PackagePath\$type" -Force
                 }
-
-                $includeDir = Join-Path -Path $mql4Dir -ChildPath "Include\$StrategyName"
-                if (Test-Path $includeDir) {
-                    $includeFiles = Get-ChildItem -Path $includeDir -File -Filter "*.mqh" -ErrorAction SilentlyContinue
-                    if ($includeFiles) {
-                        $includeDevDir = Join-Path -Path $mt4DevBuildDir -ChildPath "MQL4\Include\$StrategyName"
-                        $includeTestDir = Join-Path -Path $mt4TestBuildDir -ChildPath "MQL4\Include\$StrategyName"
-                        $includeDeployDir = Join-Path -Path $mt4DeployDir -ChildPath "MQL4\Include\$StrategyName"
-                        $includePackageDir = Join-Path -Path $mt4PackageDir -ChildPath "include"
-                        Create-Directory -Path $includeDevDir
-                        Create-Directory -Path $includeTestDir
-                        Create-Directory -Path $includeDeployDir
-                        Create-Directory -Path $includePackageDir
-                        foreach ($file in $includeFiles) {
-                            Write-Status "Copying MT4 dependency: $($file.Name)" "Cyan"
-                            Copy-Item -Path $file.FullName -Destination $includeDevDir -Force
-                            Copy-Item -Path $file.FullName -Destination $includeTestDir -Force
-                            Copy-Item -Path $file.FullName -Destination $includeDeployDir -Force
-                            Copy-Item -Path $file.FullName -Destination $includePackageDir -Force
-                        }
-                    }
+            }
+            if ($MT5DevPath) {
+                $sourceMT5 = Join-Path -Path $MT5DevPath -ChildPath "MT5\MQL5"
+                $mt5Files = Get-ChildItem -Path "$sourceMT5\$type\$StrategyName\*.ex5" -ErrorAction SilentlyContinue
+                foreach ($file in $mt5Files) {
+                    Write-Status "Copying $type file: $($file.Name) to environments" "Green"
+                    Copy-Item -Path $file.FullName -Destination "$MT5DevPath\MQL5\$type\$StrategyName" -Force
+                    Copy-Item -Path $file.FullName -Destination "$MT5TestPath\MQL5\$type\$StrategyName" -Force
+                    Copy-Item -Path $file.FullName -Destination "$MT5DeployPath\MQL5\$type\$StrategyName" -Force
+                    Copy-Item -Path $file.FullName -Destination "$MT5PackagePath\$type" -Force
                 }
-
-                $resources = @("Files", "Images")
-                foreach ($folder in $resources) {
-                    $resourceDir = Join-Path -Path $mql4Dir -ChildPath "$folder\$StrategyName"
-                    if (Test-Path $resourceDir) {
-                        $resourceFiles = Get-ChildItem -Path $resourceDir -File -ErrorAction SilentlyContinue
-                        if ($resourceFiles) {
-                            $resourcePackageDir = Join-Path -Path $mt4PackageDir -ChildPath "resources\$folder"
-                            Create-Directory -Path $resourcePackageDir
-                            foreach ($file in $resourceFiles) {
-                                Write-Status "Copying MT4 resource: $($file.Name)" "Cyan"
-                                Copy-Item -Path $file.FullName -Destination $resourcePackageDir -Force
-                            }
-                        }
-                    }
-                }
-            } else {
-                Write-Status "MQL4 directory not found at $mql4Dir" "Red"
             }
         }
-
-        if ($foundFiles) {
-            Write-Status "MT4 compiled files, dependencies, and resources synced to Dev, Test, Deploy, and Package environments." "Green"
-        } else {
-            Write-Status "No compiled MT4 files found in Experts, Indicators, or Scripts for $StrategyName." "Yellow"
-        }
-    } else {
-        Write-Status "MT4 path not found: $MT4Path" "Red"
+    } catch {
+        Write-Status "Failed to sync compiled files. Error: $($_.Exception.Message)" "Red"
+        throw
     }
-
-    if (Test-Path $MT5Path) {
-        Write-Status "Syncing MT5 files from $MT5Path..." "Yellow"
-        $mt5DevBuildDir = Join-Path -Path $DevPath -ChildPath "MT5"
-        $mt5TestBuildDir = Join-Path -Path $TestPath -ChildPath "MT5"
-        $mt5DeployDir = Join-Path -Path $DeployPath -ChildPath "MT5"
-        $mt5PackageDir = Join-Path -Path $PackagePath -ChildPath "MT5\$CollectionName\$StrategyName"
-
-        Create-Directory -Path $mt5DevBuildDir
-        Create-Directory -Path $mt5TestBuildDir
-        Create-Directory -Path $mt5DeployDir
-        Create-Directory -Path $mt5PackageDir
-
-        Get-ChildItem -Path $MT5Path -Directory | ForEach-Object {
-            $brokerDir = $_.FullName
-            $mql5Dir = Join-Path -Path $brokerDir -ChildPath "MQL5"
-            if (Test-Path $mql5Dir) {
-                Write-Status "Checking MQL5 directory: $mql5Dir" "Cyan"
-                foreach ($folder in @("Experts", "Indicators", "Scripts")) {
-                    $sourceDir = Join-Path -Path $mql5Dir -ChildPath "$folder\$StrategyName"
-                    Write-Status "Looking for compiled files in $sourceDir..." "Cyan"
-                    if (Test-Path $sourceDir) {
-                        $compiledFiles = Get-ChildItem -Path $sourceDir -File -Filter "*.ex5" -ErrorAction SilentlyContinue
-                        if ($compiledFiles) {
-                            foreach ($file in $compiledFiles) {
-                                Write-Status "Copying MT5 $folder file: $($file.Name) from $sourceDir" "Green"
-                                $targetDevDir = Join-Path -Path $mt5DevBuildDir -ChildPath "MQL5\$folder\$StrategyName"
-                                $targetTestDir = Join-Path -Path $mt5TestBuildDir -ChildPath "MQL5\$folder\$StrategyName"
-                                $targetDeployDir = Join-Path -Path $mt5DeployDir -ChildPath "MQL5\$folder\$StrategyName"
-                                Create-Directory -Path $targetDevDir
-                                Create-Directory -Path $targetTestDir
-                                Create-Directory -Path $targetDeployDir
-                                Copy-Item -Path $file.FullName -Destination $targetDevDir -Force
-                                Copy-Item -Path $file.FullName -Destination $targetTestDir -Force
-                                Copy-Item -Path $file.FullName -Destination $targetDeployDir -Force
-                                Copy-Item -Path $file.FullName -Destination (Join-Path -Path $mt5PackageDir -ChildPath "$folder") -Force
-                                $foundFiles = $true
-                            }
-                        } else {
-                            Write-Status "No compiled .ex5 files found in $sourceDir" "Yellow"
-                        }
-                    } else {
-                        Write-Status "Directory $sourceDir does not exist" "Red"
-                    }
-                }
-
-                $includeDir = Join-Path -Path $mql5Dir -ChildPath "Include\$StrategyName"
-                if (Test-Path $includeDir) {
-                    $includeFiles = Get-ChildItem -Path $includeDir -File -Filter "*.mqh" -ErrorAction SilentlyContinue
-                    if ($includeFiles) {
-                        $includeDevDir = Join-Path -Path $mt5DevBuildDir -ChildPath "MQL5\Include\$StrategyName"
-                        $includeTestDir = Join-Path -Path $mt5TestBuildDir -ChildPath "MQL5\Include\$StrategyName"
-                        $includeDeployDir = Join-Path -Path $mt5DeployDir -ChildPath "MQL5\Include\$StrategyName"
-                        $includePackageDir = Join-Path -Path $mt5PackageDir -ChildPath "include"
-                        Create-Directory -Path $includeDevDir
-                        Create-Directory -Path $includeTestDir
-                        Create-Directory -Path $includeDeployDir
-                        Create-Directory -Path $includePackageDir
-                        foreach ($file in $includeFiles) {
-                            Write-Status "Copying MT5 dependency: $($file.Name)" "Cyan"
-                            Copy-Item -Path $file.FullName -Destination $includeDevDir -Force
-                            Copy-Item -Path $file.FullName -Destination $includeTestDir -Force
-                            Copy-Item -Path $file.FullName -Destination $includeDeployDir -Force
-                            Copy-Item -Path $file.FullName -Destination $includePackageDir -Force
-                        }
-                    }
-                }
-
-                $resources = @("Files", "Images")
-                foreach ($folder in $resources) {
-                    $resourceDir = Join-Path -Path $mql5Dir -ChildPath "$folder\$StrategyName"
-                    if (Test-Path $resourceDir) {
-                        $resourceFiles = Get-ChildItem -Path $resourceDir -File -ErrorAction SilentlyContinue
-                        if ($resourceFiles) {
-                            $resourcePackageDir = Join-Path -Path $mt5PackageDir -ChildPath "resources\$folder"
-                            Create-Directory -Path $resourcePackageDir
-                            foreach ($file in $resourceFiles) {
-                                Write-Status "Copying MT5 resource: $($file.Name)" "Cyan"
-                                Copy-Item -Path $file.FullName -Destination $resourcePackageDir -Force
-                            }
-                        }
-                    }
-                }
-            } else {
-                Write-Status "MQL5 directory not found at $mql5Dir" "Red"
+}
+function Update-BuildFile {
+    param ([array]$Installations, [string]$CollectionName, [string]$StrategyName, [boolean]$SkipDocker)
+    try {
+        $buildFile = "C:\Trading\MTFramework\build.json"
+        $buildConfig = if (Test-Path $buildFile) { Get-Content $buildFile -Raw | ConvertFrom-Json } else { @{ BasePath = "C:\Trading\MTFramework"; StrategyCollections = @() } }
+        $mt4Paths = @{
+            DevPath = "C:\Trading\MTFramework\MT4\afterprime\coll1\Dev"
+            TestPath = "C:\Trading\MTFramework\MT4\afterprime\coll1\Test"
+            DeployPath = "C:\Trading\MTFramework\MT4\afterprime\coll1\Deploy"
+            PackagePath = "C:\Trading\MTFramework\MT4\afterprime\coll1\Package"
+        }
+        $mt5Paths = @{
+            DevPath = "C:\Trading\MTFramework\MT5\afterprime\coll1\Dev"
+            TestPath = "C:\Trading\MTFramework\MT5\afterprime\coll1\Test"
+            DeployPath = "C:\Trading\MTFramework\MT5\afterprime\coll1\Deploy"
+            PackagePath = "C:\Trading\MTFramework\MT5\afterprime\coll1\Package"
+        }
+        $newCollection = @{
+            CollectionName = $CollectionName
+            StrategyName = $StrategyName
+            SkipDocker = $SkipDocker
+            Installations = $Installations
+            Config = @{
+                MT4RootPath = "C:\Trading\MTFramework\MT4"
+                MT5RootPath = "C:\Trading\MTFramework\MT5"
+                MT4Paths = $mt4Paths
+                MT5Paths = $mt5Paths
             }
         }
-
-        if ($foundFiles) {
-            Write-Status "MT5 compiled files, dependencies, and resources synced to Dev, Test, Deploy, and Package environments." "Green"
-        } else {
-            Write-Status "No compiled MT5 files found in Experts, Indicators, or Scripts for $StrategyName." "Yellow"
-        }
-    } else {
-        Write-Status "MT5 path not found: $MT5Path" "Red"
-    }
-
-    if (-not $foundFiles) {
-        Write-Status "No compiled files were synced. Ensure strategies are compiled in MetaTrader or via Docker." "Yellow"
+        $buildConfig.StrategyCollections = @($buildConfig.StrategyCollections | Where-Object { $_.CollectionName -ne $CollectionName -or $_.StrategyName -ne $StrategyName }) + $newCollection
+        $buildConfig | ConvertTo-Json -Depth 10 | Set-Content -Path $buildFile
+        Write-Status "Updated build file: $buildFile" "Green"
+    } catch {
+        Write-Status "Failed to update build file. Error: $($_.Exception.Message)" "Red"
+        throw
     }
 }
-
-function Update-ConfigFile {
-    param (
-        [array]$Installations,
-        [string]$BasePath,
-        [string]$StrategyName,
-        [string]$CollectionName,
-        [switch]$SkipDocker
-    )
-    $configFile = Join-Path -Path $PSScriptRoot -ChildPath "config.json"
-    $config = if (Test-Path $configFile) { 
-        $jsonContent = Get-Content $configFile -Raw | ConvertFrom-Json
-        if ($jsonContent -is [array]) { $jsonContent } else { @($jsonContent) }
-    } else { 
-        @() 
-    }
-
-    $newInstance = [PSCustomObject]@{
-        BasePath = $BasePath
-        StrategyName = $StrategyName
-        CollectionName = $CollectionName
-        SkipDocker = [bool]$SkipDocker
-        Installations = $Installations
-        Config = @{
-            MT4RootPath = Join-Path -Path $BasePath -ChildPath "MT4"
-            MT5RootPath = Join-Path -Path $BasePath -ChildPath "MT5"
-            DevPath = Join-Path -Path $BasePath -ChildPath "MT4\$MT4BrokerName\$CollectionName\Dev"
-            TestPath = Join-Path -Path $BasePath -ChildPath "MT4\$MT4BrokerName\$CollectionName\Test"
-            DeployPath = Join-Path -Path $BasePath -ChildPath "MT4\$MT4BrokerName\$CollectionName\Deploy"
-            PackagePath = Join-Path -Path $BasePath -ChildPath "MT4\$MT4BrokerName\$CollectionName\Package"
-        }
-    }
-
-    $config = @($config | Where-Object { -not ($_.BasePath -eq $BasePath -and $_.StrategyName -eq $StrategyName -and $_.CollectionName -eq $CollectionName) })
-    $config += $newInstance
-
-    $config | ConvertTo-Json -Depth 10 | Set-Content -Path $configFile
-    Write-Status "Updated config file with new setup: $configFile" "Green"
-}
-
 function Start-Setup {
-    param (
-        [string]$BasePath,
-        [switch]$SkipMT4,
-        [switch]$SkipMT5,
-        [string]$MT4BrokerName,
-        [string]$MT5BrokerName,
-        [string]$MT4Path,
-        [string]$MT5Path,
-        [switch]$SkipDocker,
-        [string]$StrategyName,
-        [string]$CollectionName
-    )
-
-    Write-Status "Starting MT Trading Framework Setup" "Cyan"
-    Create-Directory -Path $BasePath
-
-    $Config = @{
-        MT4RootPath = Join-Path -Path $BasePath -ChildPath "MT4"
-        MT5RootPath = Join-Path -Path $BasePath -ChildPath "MT5"
-        DevPath = Join-Path -Path $BasePath -ChildPath "MT4\$MT4BrokerName\$CollectionName\Dev"
-        TestPath = Join-Path -Path $BasePath -ChildPath "MT4\$MT4BrokerName\$CollectionName\Test"
-        DeployPath = Join-Path -Path $BasePath -ChildPath "MT4\$MT4BrokerName\$CollectionName\Deploy"
-        PackagePath = Join-Path -Path $BasePath -ChildPath "MT4\$MT4BrokerName\$CollectionName\Package"
-    }
-
-    $Installations = @()
-    if (-not $SkipMT4) {
-        # Main MT4 environment under coll1
-        $mt4Inst = Install-MetaTrader -Version "MT4" -BrokerName $MT4BrokerName -CollectionName $CollectionName -RootPath $Config.MT4RootPath -EnvironmentName "MT4" -ExplicitPath $MT4Path
-        if ($mt4Inst) { 
-            $Installations += $mt4Inst
-            Create-Shortcut -TargetPath $mt4Inst.Terminal -ShortcutName "MT4 - $MT4BrokerName [$CollectionName-$StrategyName] Main" -BrokerName $MT4BrokerName 
+    param ([string]$CollectionName, [string]$StrategyName)
+    try {
+        $setupFile = Join-Path -Path $PSScriptRoot -ChildPath "setup.json"
+        $setupConfig = Get-Content $setupFile -Raw | ConvertFrom-Json
+        $sc = $setupConfig.StrategyCollections | Where-Object { $_.CollectionName -eq $CollectionName -and $_.StrategyName -eq $StrategyName }
+        if (-not $sc) {
+            Write-Status "Strategy collection $CollectionName-$StrategyName not found in $setupFile" "Red"
+            throw "Configuration not found"
         }
-
-        # Deploy MT4 environment
-        $mt4DeployInst = Install-MetaTrader -Version "MT4" -BrokerName $MT4BrokerName -CollectionName $CollectionName -RootPath $Config.MT4RootPath -EnvironmentName "Deploy" -ExplicitPath $MT4Path
-        if ($mt4DeployInst) { 
-            $Installations += $mt4DeployInst
-            Create-Shortcut -TargetPath $mt4DeployInst.Terminal -ShortcutName "MT4 - $MT4BrokerName [$CollectionName-$StrategyName] Deploy" -BrokerName $MT4BrokerName 
+        $installations = @()
+        foreach ($platform in $sc.Platforms) {
+            foreach ($env in $platform.Environments) {
+                $install = Install-MetaTrader -Version $platform.Platform -BrokerName $platform.BrokerName -CollectionName $CollectionName -EnvironmentName $env -ExplicitPath $platform.ExplicitPath -StrategyName $StrategyName
+                $installations += $install
+                Setup-Strategy-Folders -InstallPath $install.Path -Version $platform.Platform -StrategyName $StrategyName
+            }
         }
-
-        # Test MT4 environment
-        $mt4TestInst = Install-MetaTrader -Version "MT4" -BrokerName $MT4BrokerName -CollectionName $CollectionName -RootPath $Config.MT4RootPath -EnvironmentName "Test" -ExplicitPath $MT4Path
-        if ($mt4TestInst) { 
-            $Installations += $mt4TestInst
-            Create-Shortcut -TargetPath $mt4TestInst.Terminal -ShortcutName "MT4 - $MT4BrokerName [$CollectionName-$StrategyName] Test" -BrokerName $MT4BrokerName 
-        }
+        Update-BuildFile -Installations $installations -CollectionName $CollectionName -StrategyName $StrategyName -SkipDocker $sc.SkipDocker
+    } catch {
+        Write-Status "Failed to start setup for $CollectionName-$StrategyName. Error: $($_.Exception.Message)" "Red"
+        throw
     }
-    if (-not $SkipMT5) {
-        $mt5Inst = Install-MetaTrader -Version "MT5" -BrokerName $MT5BrokerName -CollectionName $CollectionName -RootPath $Config.MT5RootPath -EnvironmentName "MT5" -ExplicitPath $MT5Path
-        if ($mt5Inst) { 
-            $Installations += $mt5Inst
-            Create-Shortcut -TargetPath $mt5Inst.Terminal -ShortcutName "MT5 - $MT5BrokerName [$CollectionName-$StrategyName] Main" -BrokerName $MT5BrokerName 
-        }
-    }
-
-    Setup-Strategy-Folders -Installations $Installations -StrategyName $StrategyName
-    if (-not $SkipDocker) { Setup-Docker -Installations $Installations -StrategyName $StrategyName }
-
-    if ($Installations.Count -gt 0) {
-        Update-ConfigFile -Installations $Installations -BasePath $BasePath -StrategyName $StrategyName -CollectionName $CollectionName -SkipDocker:$SkipDocker
-    }
-
-    Write-Status "Setup complete at $BasePath. Run BuildManager.ps1 to launch the build manager GUI." "Green"
 }
 
-# Execute setup only if parameters are provided
-if ($PSBoundParameters.Count -gt 0) {
-    Start-Setup -BasePath $BasePath -SkipMT4:$SkipMT4 -SkipMT5:$SkipMT5 -MT4BrokerName $MT4BrokerName -MT5BrokerName $MT5BrokerName `
-                -MT4Path $MT4Path -MT5Path $MT5Path -SkipDocker:$SkipDocker -StrategyName $StrategyName -CollectionName $CollectionName
+# Main execution logic
+function Main {
+    try {
+        $setupFile = Join-Path -Path $PSScriptRoot -ChildPath "setup.json"
+        if ($GenerateSetup) {
+            $basePath = "C:\Trading\MTFramework"
+            $collectionName = "coll1"
+            $strategyName = "DefaultStrategy"
+            $platforms = @()
+            
+            Write-Host "Select the platform(s) to set up:"
+            Write-Host "1. MT4 Only"
+            Write-Host "2. MT5 Only"
+            Write-Host "3. Both MT4 and MT5"
+            $platformChoice = Read-Host "Enter your choice (1-3)"
+            
+            if ($platformChoice -notin @("1", "2", "3")) {
+                Write-Status "Invalid choice. Please select 1, 2, or 3." "Red"
+                exit
+            }
+            
+            $mt4BrokerName = Read-Host "Enter MT4 Broker Name (default: afterprime)"
+            if (-not $mt4BrokerName) { $mt4BrokerName = "afterprime" }
+            
+            $mt5BrokerName = Read-Host "Enter MT5 Broker Name (default: afterprime)"
+            if (-not $mt5BrokerName) { $mt5BrokerName = "afterprime" }
+            
+            $mt4Path = Read-Host "Enter explicit MT4 installation path (leave blank to auto-detect)"
+            $mt5Path = Read-Host "Enter explicit MT5 installation path (leave blank to auto-detect)"
+            
+            $dockerChoice = Read-Host "Use Docker for advanced compilation? (1 for Yes, 0 for No)"
+            $skipDocker = $dockerChoice -eq "0"
+            
+            if ($platformChoice -eq "1" -or $platformChoice -eq "3") {
+                $platforms += @{ Platform = "MT4"; BrokerName = $mt4BrokerName; ExplicitPath = $mt4Path; Environments = @("Dev", "Test", "Deploy") }
+            }
+            if ($platformChoice -eq "2" -or $platformChoice -eq "3") {
+                $platforms += @{ Platform = "MT5"; BrokerName = $mt5BrokerName; ExplicitPath = $mt5Path; Environments = @("Dev", "Test", "Deploy") }
+            }
+            
+            $newSetup = @{
+                BasePath = $basePath
+                StrategyCollections = @(
+                    @{
+                        CollectionName = $collectionName
+                        StrategyName = $strategyName
+                        Platforms = $platforms
+                        SkipDocker = $skipDocker
+                    }
+                )
+            }
+            
+            $newSetup | ConvertTo-Json -Depth 10 | Set-Content -Path $setupFile
+            Write-Status "Generated new setup file at $setupFile" "Green"
+        }
+
+        if (-not (Test-Path $setupFile)) {
+            Write-Status "Setup file not found at $setupFile" "Red"
+            exit
+        }
+        $setupConfig = Get-Content $setupFile -Raw | ConvertFrom-Json
+        if (-not $setupConfig.StrategyCollections) {
+            Write-Status "No StrategyCollections found in $setupFile" "Red"
+            exit
+        }
+        foreach ($sc in $setupConfig.StrategyCollections) {
+            Start-Setup -CollectionName $sc.CollectionName -StrategyName $sc.StrategyName
+        }
+    } catch {
+        Write-Status "Main setup failed. Error: $($_.Exception.Message)" "Red"
+        exit
+    }
+}
+
+# Only execute Main if the script is run directly
+if ($MyInvocation.InvocationName -ne '.') {
+    Main
 }

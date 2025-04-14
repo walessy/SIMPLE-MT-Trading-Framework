@@ -1,315 +1,402 @@
-[CmdletBinding()]
-param ()
-
-# Ensure script runs from its own directory
-Set-Location -Path $PSScriptRoot
-
-# Import functions from MTSetup.ps1 without running setup
-. (Join-Path -Path $PSScriptRoot -ChildPath "MTSetup.ps1")
-
-# Load config
-$configFile = Join-Path -Path $PSScriptRoot -ChildPath "config.json"
-if (-not (Test-Path $configFile)) {
-    Write-Host "Config file not found at $configFile. Please run MTSetup.ps1 first." -ForegroundColor Red
-    exit 1
-}
-$configs = Get-Content $configFile -Raw | ConvertFrom-Json
-
-# Continuous Build Functions
-function Start-ContinuousBuild {
-    param ([array]$Installations, [string]$DevPath, [string]$TestPath, [string]$DeployPath, [string]$PackagePath, 
-           [string]$MT4Path, [string]$MT5Path, [string]$StrategyName, [string]$CollectionName, 
-           [string]$BasePath, [switch]$SkipDocker, [int]$BuildIntervalSeconds = 30)
-
-    $flagFile = Join-Path -Path $BasePath -ChildPath "continuous_build_running.flag"
-    if (Test-Path $flagFile) {
-        $jobId = Get-Content -Path $flagFile -ErrorAction SilentlyContinue
-        $job = Get-Job -Id $jobId -ErrorAction SilentlyContinue
-        if ($job -and $job.State -eq "Running") {
-            Write-StatusGUI "Continuous build already running for $CollectionName-$StrategyName (Job ID: $jobId)."
-            return
-        } else {
-            Write-StatusGUI "Found stale flag file. Cleaning up..."
-            Remove-Item -Path $flagFile -Force -ErrorAction SilentlyContinue
-            if ($job) {
-                Stop-Job -Id $jobId -ErrorAction SilentlyContinue
-                Remove-Job -Id $jobId -ErrorAction SilentlyContinue
-            }
-        }
-    }
-
-    $job = Start-Job -ScriptBlock {
-        param ($installations, $devPath, $testPath, $deployPath, $packagePath, $mt4Path, $mt5Path, $strategyName, $collectionName, $skipDocker, $interval, $basePath, $scriptRoot)
-        # Define Write-StatusGUI within the job to send messages back to the GUI
-        function Write-StatusGUI {
-            param ([string]$Message)
-            try {
-                [System.Windows.Forms.Application]::OpenForms[0].Controls['statusBox'].Invoke([Action]{ 
-                    [System.Windows.Forms.Application]::OpenForms[0].Controls['statusBox'].AppendText("$Message`r`n") 
-                })
-            } catch {
-                Write-Output "Failed to update GUI: $_"
-            }
-        }
-        # Define Update-CurrentTask to update the current task label
-        function Update-CurrentTask {
-            param ([string]$Task)
-            try {
-                [System.Windows.Forms.Application]::OpenForms[0].Controls['currentTaskLabel'].Invoke([Action]{ 
-                    [System.Windows.Forms.Application]::OpenForms[0].Controls['currentTaskLabel'].Text = "Current Task: $Task"
-                })
-            } catch {
-                Write-Output "Failed to update current task: $_"
-            }
-        }
-
-        Set-Location -Path $basePath
-        . (Join-Path -Path $scriptRoot -ChildPath "MTSetup.ps1")
-        while ($true) {
-            if (-not (Test-Path (Join-Path -Path $basePath -ChildPath "continuous_build_running.flag"))) { break }
-            Write-StatusGUI "Running periodic build for $collectionName-$strategyName at $(Get-Date)..."
-            
-            if (-not $skipDocker) {
-                Update-CurrentTask "Building MQL Files..."
-                Write-StatusGUI "Starting MQL file compilation..."
-                Build-MQLFiles -Installations $installations -StrategyName $strategyName
-                Write-StatusGUI "Docker build completed."
-            } else {
-                Write-StatusGUI "Basic mode: Checking for manually compiled files..."
-            }
-            
-            Update-CurrentTask "Syncing Compiled Files..."
-            Write-StatusGUI "Syncing compiled files to Dev, Test, Deploy, and Package environments..."
-            Sync-CompiledFiles -DevPath $devPath -TestPath $testPath -DeployPath $deployPath -PackagePath $packagePath `
-                              -MT4Path $mt4Path -MT5Path $mt5Path -CollectionName $collectionName -StrategyName $strategyName
-            Write-StatusGUI "Files synced to all environments."
-            
-            Update-CurrentTask "Waiting for Next Build..."
-            Write-StatusGUI "Build cycle completed. Waiting for next cycle..."
-            Start-Sleep -Seconds $interval
-        }
-    } -ArgumentList $Installations, $DevPath, $TestPath, $DeployPath, $PackagePath, $MT4Path, $MT5Path, $StrategyName, $CollectionName, $SkipDocker, $BuildIntervalSeconds, $BasePath, $PSScriptRoot
-
-    Set-Content -Path $flagFile -Value $job.Id
-    Write-StatusGUI "Continuous build started for $CollectionName-$StrategyName (Job ID: $($job.Id))."
-    
-    # Start the countdown timer
-    $script:lastBuildTime = Get-Date
-    $script:buildInterval = $BuildIntervalSeconds
-    $timer.Start()
-}
-
-function Stop-ContinuousBuild {
-    param ([string]$BasePath)
-    $flagFile = Join-Path -Path $BasePath -ChildPath "continuous_build_running.flag"
-    if (Test-Path $flagFile) {
-        $jobId = Get-Content -Path $flagFile -ErrorAction SilentlyContinue
-        $job = Get-Job -Id $jobId -ErrorAction SilentlyContinue
-        if ($job) {
-            Stop-Job -Id $jobId -ErrorAction SilentlyContinue
-            Remove-Job -Id $jobId -ErrorAction SilentlyContinue
-        }
-        Remove-Item -Path $flagFile -Force -ErrorAction SilentlyContinue
-        Write-StatusGUI "Continuous build stopped for $BasePath."
-        $timer.Stop()
-        $timerLabel.Text = "Next Build: N/A"
-        $currentTaskLabel.Text = "Current Task: None"
-    } else {
-        Write-StatusGUI "No continuous build running for $BasePath."
-    }
-}
-
-# GUI Setup
+# BuildManager.ps1
 Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.Application]::EnableVisualStyles()
+Add-Type -AssemblyName System.Drawing
 
+# Script-level variables to avoid scope issues
+$script:isRunning = $false
+$script:secondsRemaining = 0
+$script:buildInterval = 30  # Build interval in seconds
+
+# Helper function to append text with color to a RichTextBox
+function Append-TextWithColor {
+    param (
+        [System.Windows.Forms.RichTextBox]$TextBox,
+        [string]$Text,
+        [System.Drawing.Color]$Color
+    )
+    # Debug logging to see what text is being appended
+    Write-Host "Appending to RichTextBox: $Text"
+    $TextBox.SuspendLayout()
+    $TextBox.SelectionStart = $TextBox.TextLength
+    $TextBox.SelectionLength = 0
+    $TextBox.SelectionColor = $Color
+    $TextBox.AppendText($Text + "`n")
+    $TextBox.SelectionColor = $TextBox.ForeColor
+    $TextBox.ResumeLayout()
+    # Auto-scroll to the bottom
+    $TextBox.SelectionStart = $TextBox.Text.Length
+    $TextBox.ScrollToCaret()
+}
+
+# Form setup
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "MT Trading Framework Build Manager"
-$form.Size = New-Object System.Drawing.Size(400, 450)
+$form.Size = New-Object System.Drawing.Size(600, 500)
 $form.StartPosition = "CenterScreen"
 
-$setupLabel = New-Object System.Windows.Forms.Label
-$setupLabel.Text = "Select Setup:"
-$setupLabel.Location = New-Object System.Drawing.Point(10, 10)
-$setupLabel.Size = New-Object System.Drawing.Size(100, 20)
-$form.Controls.Add($setupLabel)
+# Dropdown for selecting strategy collection
+$dropdownLabel = New-Object System.Windows.Forms.Label
+$dropdownLabel.Text = "Select Strategy Collection:"
+$dropdownLabel.Location = New-Object System.Drawing.Point(10, 10)
+$dropdownLabel.Size = New-Object System.Drawing.Size(150, 20)
+$form.Controls.Add($dropdownLabel)
 
-$setupComboBox = New-Object System.Windows.Forms.ComboBox
-$setupComboBox.Location = New-Object System.Drawing.Point(120, 10)
-$setupComboBox.Size = New-Object System.Drawing.Size(250, 20)
-$configs | ForEach-Object { $setupComboBox.Items.Add("$($_.CollectionName)-$($_.StrategyName)") } | Out-Null
-if ($configs.Count -gt 0) { $setupComboBox.SelectedIndex = 0 }
-$form.Controls.Add($setupComboBox)
+$dropdown = New-Object System.Windows.Forms.ComboBox
+$dropdown.Location = New-Object System.Drawing.Point(160, 10)
+$dropdown.Size = New-Object System.Drawing.Size(200, 20)
+$form.Controls.Add($dropdown)
 
-$statusBox = New-Object System.Windows.Forms.TextBox
-$statusBox.Name = "statusBox"
+# Start Build button
+$startButton = New-Object System.Windows.Forms.Button
+$startButton.Text = "Start Build"
+$startButton.Location = New-Object System.Drawing.Point(370, 10)
+$startButton.Size = New-Object System.Drawing.Size(100, 30)
+$form.Controls.Add($startButton)
+
+# Stop Build button
+$stopButton = New-Object System.Windows.Forms.Button
+$stopButton.Text = "Stop Build"
+$stopButton.Location = New-Object System.Drawing.Point(480, 10)
+$stopButton.Size = New-Object System.Drawing.Size(100, 30)
+$stopButton.Enabled = $false
+$form.Controls.Add($stopButton)
+
+# Build status box (RichTextBox)
+$statusBox = New-Object System.Windows.Forms.RichTextBox
+$statusBox.Location = New-Object System.Drawing.Point(10, 50)
+$statusBox.Size = New-Object System.Drawing.Size(560, 200)  # Top half of the form
 $statusBox.Multiline = $true
 $statusBox.ScrollBars = "Vertical"
 $statusBox.ReadOnly = $true
-$statusBox.Location = New-Object System.Drawing.Point(10, 40)
-$statusBox.Size = New-Object System.Drawing.Size(360, 200)
+$statusBox.BackColor = [System.Drawing.Color]::LightGray
+$statusBox.ForeColor = [System.Drawing.Color]::Black
+# Add KeyPress event handler to suppress default sounds
+$statusBox.Add_KeyPress({
+    param($sender, $e)
+    $e.Handled = $true  # Suppress default keypress sounds
+})
+# Add TextChanged event handler to suppress potential sounds
+$statusBox.Add_TextChanged({
+    param($sender, $e)
+    # Do nothing, just suppress any potential sound
+})
 $form.Controls.Add($statusBox)
 
-$startButton = New-Object System.Windows.Forms.Button
-$startButton.Text = "Start Build"
-$startButton.Location = New-Object System.Drawing.Point(10, 250)
-$startButton.Size = New-Object System.Drawing.Size(80, 30)
-$startButton.Add_Click({
-    if ($setupComboBox.SelectedIndex -eq -1) {
-        $statusBox.AppendText("Please select a setup.`r`n")
-        return
+# Countdown box (TextBox)
+$countdownBox = New-Object System.Windows.Forms.TextBox
+$countdownBox.Location = New-Object System.Drawing.Point(10, 260)
+$countdownBox.Size = New-Object System.Drawing.Size(560, 200)  # Bottom half of the form
+$countdownBox.Multiline = $true
+$countdownBox.ReadOnly = $true
+$countdownBox.BackColor = [System.Drawing.Color]::LightGray
+$countdownBox.ForeColor = [System.Drawing.Color]::DarkOrange
+$countdownBox.Text = ""
+$form.Controls.Add($countdownBox)
+
+# Load setup.json to get the BasePath
+$setupFile = Join-Path -Path $PSScriptRoot -ChildPath "setup.json"
+if (-not (Test-Path $setupFile)) {
+    Append-TextWithColor -TextBox $statusBox -Text "Setup file not found at $setupFile. Please run MTSetup.ps1 first." -Color Red
+    $startButton.Enabled = $false
+    exit
+}
+
+$setupConfig = Get-Content $setupFile -Raw | ConvertFrom-Json
+$basePath = $setupConfig.BasePath
+
+# Load build.json from the BasePath
+$buildFile = Join-Path -Path $basePath -ChildPath "build.json"
+if (-not (Test-Path $buildFile)) {
+    Append-TextWithColor -TextBox $statusBox -Text "Build file not found at $buildFile. Please run MTSetup.ps1 to set up the environment." -Color Red
+    $startButton.Enabled = $false
+    exit
+}
+
+$buildConfig = Get-Content $buildFile -Raw | ConvertFrom-Json
+
+# Populate dropdown with strategy collections
+$strategyCollections = $buildConfig.StrategyCollections | ForEach-Object { "$($_.CollectionName)-$($_.StrategyName)" } | Sort-Object
+foreach ($sc in $strategyCollections) {
+    $dropdown.Items.Add($sc) | Out-Null
+}
+if ($dropdown.Items.Count -gt 0) {
+    $dropdown.SelectedIndex = 0
+}
+
+# Function to display strategy collections, platforms, and strategies
+function Display-StrategyCollections {
+    param (
+        [System.Windows.Forms.RichTextBox]$TextBox,
+        [PSCustomObject]$StrategyCollection,
+        [PSCustomObject]$SetupConfig
+    )
+
+    Append-TextWithColor -TextBox $TextBox -Text "Strategy Collection:" -Color DarkBlue
+    Append-TextWithColor -TextBox $TextBox -Text "  Collection: $($StrategyCollection.CollectionName)" -Color White
+    Append-TextWithColor -TextBox $TextBox -Text "    Strategy: $($StrategyCollection.StrategyName)" -Color White
+
+    # Find the corresponding setup configuration to get platform and environment details
+    $setupStrategyCollection = $SetupConfig.StrategyCollections | Where-Object { $_.CollectionName -eq $StrategyCollection.CollectionName -and $_.StrategyName -eq $StrategyCollection.StrategyName }
+    if ($setupStrategyCollection) {
+        foreach ($platform in $setupStrategyCollection.Platforms) {
+            $platformName = $platform.Platform
+            Append-TextWithColor -TextBox $TextBox -Text "    Platform: $platformName" -Color White
+
+            # List environments for each platform
+            $environments = $platform.Environments | Sort-Object
+            foreach ($env in $environments) {
+                Append-TextWithColor -TextBox $TextBox -Text "      Environment: $env" -Color White
+            }
+        }
     }
-    $selectedConfig = $configs[$setupComboBox.SelectedIndex]
-    try {
-        Start-ContinuousBuild -Installations $selectedConfig.Installations `
-                              -DevPath $selectedConfig.Config.DevPath `
-                              -TestPath $selectedConfig.Config.TestPath `
-                              -DeployPath $selectedConfig.Config.DeployPath `
-                              -PackagePath $selectedConfig.Config.PackagePath `
-                              -MT4Path $selectedConfig.Config.MT4RootPath `
-                              -MT5Path $selectedConfig.Config.MT5RootPath `
-                              -StrategyName $selectedConfig.StrategyName `
-                              -CollectionName $selectedConfig.CollectionName `
-                              -BasePath $selectedConfig.BasePath `
-                              -SkipDocker:$selectedConfig.SkipDocker `
-                              -BuildIntervalSeconds 30
-        $statusBox.AppendText("Started continuous build at $(Get-Date)`r`n")
-        $startButton.Enabled = $false
-        $stopButton.Enabled = $true
-    } catch {
-        $statusBox.AppendText("Error starting build: $_`r`n")
-    }
-})
-$form.Controls.Add($startButton)
+}
 
-$stopButton = New-Object System.Windows.Forms.Button
-$stopButton.Text = "Stop Build"
-$stopButton.Location = New-Object System.Drawing.Point(100, 250)
-$stopButton.Size = New-Object System.Drawing.Size(80, 30)
-$stopButton.Enabled = $false
-$stopButton.Add_Click({
-    if ($setupComboBox.SelectedIndex -eq -1) {
-        $statusBox.AppendText("Please select a setup.`r`n")
-        return
-    }
-    $selectedConfig = $configs[$setupComboBox.SelectedIndex]
-    try {
-        Stop-ContinuousBuild -BasePath $selectedConfig.BasePath
-        $statusBox.AppendText("Stopped continuous build at $(Get-Date)`r`n")
-        $startButton.Enabled = $true
-        $stopButton.Enabled = $false
-    } catch {
-        $statusBox.AppendText("Error stopping build: $_`r`n")
-    }
-})
-$form.Controls.Add($stopButton)
-
-$currentTaskLabel = New-Object System.Windows.Forms.Label
-$currentTaskLabel.Name = "currentTaskLabel"
-$currentTaskLabel.Text = "Current Task: None"
-$currentTaskLabel.Location = New-Object System.Drawing.Point(10, 290)
-$currentTaskLabel.Size = New-Object System.Drawing.Size(360, 20)
-$form.Controls.Add($currentTaskLabel)
-
-$timerLabel = New-Object System.Windows.Forms.Label
-$timerLabel.Text = "Next Build: N/A"
-$timerLabel.Location = New-Object System.Drawing.Point(10, 310)
-$timerLabel.Size = New-Object System.Drawing.Size(360, 20)
-$form.Controls.Add($timerLabel)
-
-$modeLabel = New-Object System.Windows.Forms.Label
-$modeLabel.Text = "Mode: N/A"
-$modeLabel.Location = New-Object System.Drawing.Point(10, 330)
-$modeLabel.Size = New-Object System.Drawing.Size(200, 20)
-$form.Controls.Add($modeLabel)
-
-# Timer for Countdown
+# Timer for periodic build (every 30 seconds)
 $timer = New-Object System.Windows.Forms.Timer
-$timer.Interval = 1000  # Update every second
+$timer.Interval = $script:buildInterval * 1000  # Convert to milliseconds
+
+# Timer for countdown (every second)
+$countdownTimer = New-Object System.Windows.Forms.Timer
+$countdownTimer.Interval = 1000  # 1 second
+
+# Main build timer tick event
 $timer.Add_Tick({
-    if ($script:lastBuildTime -and $script:buildInterval) {
-        $elapsed = [int]((Get-Date) - $script:lastBuildTime).TotalSeconds
-        $remaining = $script:buildInterval - $elapsed
-        if ($remaining -gt 0) {
-            $minutes = [math]::Floor($remaining / 60)
-            $seconds = $remaining % 60
-            $timerLabel.Text = "Next Build: $minutes min $seconds sec"
-        } else {
-            $timerLabel.Text = "Next Build: Now"
-            $script:lastBuildTime = Get-Date  # Reset timer after build
-        }
-    }
-})
-
-function Write-StatusGUI {
-    param ([string]$Message)
-    $statusBox.Invoke([Action]{ $statusBox.AppendText("$Message`r`n") })
-}
-
-# Check for existing build jobs on startup
-if ($configs.Count -gt 0) {
-    $selectedConfig = $configs[0]
-    $flagFile = Join-Path -Path $selectedConfig.BasePath -ChildPath "continuous_build_running.flag"
-    if (Test-Path $flagFile) {
-        $jobId = Get-Content -Path $flagFile -ErrorAction SilentlyContinue
-        $job = Get-Job -Id $jobId -ErrorAction SilentlyContinue
-        if ($job -and $job.State -eq "Running") {
-            $startButton.Enabled = $false
-            $stopButton.Enabled = $true
-            $script:lastBuildTime = Get-Date
-            $script:buildInterval = 30
-            $timer.Start()
-        } else {
-            Write-StatusGUI "Found stale flag file on startup. Cleaning up..."
-            Remove-Item -Path $flagFile -Force -ErrorAction SilentlyContinue
-            if ($job) {
-                Stop-Job -Id $jobId -ErrorAction SilentlyContinue
-                Remove-Job -Id $jobId -ErrorAction SilentlyContinue
-            }
-        }
-    }
-}
-
-$setupComboBox.Add_SelectedIndexChanged({
-    $selectedConfig = $configs[$setupComboBox.SelectedIndex]
-    $modeLabel.Text = if ($selectedConfig.SkipDocker) { "Mode: Basic (Manual Builds)" } else { "Mode: Advanced (Docker Builds)" }
-    
-    # Check if a build is running for the newly selected setup
-    $flagFile = Join-Path -Path $selectedConfig.BasePath -ChildPath "continuous_build_running.flag"
-    if (Test-Path $flagFile) {
-        $jobId = Get-Content -Path $flagFile -ErrorAction SilentlyContinue
-        $job = Get-Job -Id $jobId -ErrorAction SilentlyContinue
-        if ($job -and $job.State -eq "Running") {
-            $startButton.Enabled = $false
-            $stopButton.Enabled = $true
-            if (-not $timer.Enabled) {
-                $script:lastBuildTime = Get-Date
-                $script:buildInterval = 30
-                $timer.Start()
-            }
-        } else {
-            $startButton.Enabled = $true
-            $stopButton.Enabled = $false
-            $timer.Stop()
-            $timerLabel.Text = "Next Build: N/A"
-            $currentTaskLabel.Text = "Current Task: None"
-            Remove-Item -Path $flagFile -Force -ErrorAction SilentlyContinue
-            if ($job) {
-                Stop-Job -Id $jobId -ErrorAction SilentlyContinue
-                Remove-Job -Id $jobId -ErrorAction SilentlyContinue
-            }
-        }
-    } else {
-        $startButton.Enabled = $true
-        $stopButton.Enabled = $false
+    if (-not $script:isRunning) {
         $timer.Stop()
-        $timerLabel.Text = "Next Build: N/A"
-        $currentTaskLabel.Text = "Current Task: None"
+        return
     }
+
+    $selected = $dropdown.SelectedItem
+    if (-not $selected) {
+        Append-TextWithColor -TextBox $statusBox -Text "Please select a strategy collection to build." -Color Red
+        return
+    }
+
+    $collectionName, $strategyName = $selected.Split('-')
+    $strategyCollection = $buildConfig.StrategyCollections | Where-Object { $_.CollectionName -eq $collectionName -and $_.StrategyName -eq $strategyName }
+    if (-not $strategyCollection) {
+        Append-TextWithColor -TextBox $statusBox -Text "Configuration for $selected not found in build.json." -Color Red
+        return
+    }
+
+    # Stop the countdown timer during the build
+    $countdownTimer.Stop()
+    $countdownBox.Text = ""
+    Write-Host "Build started, cleared countdownBox"
+    Append-TextWithColor -TextBox $statusBox -Text "Running build for $selected at $(Get-Date -Format 'MM/dd/yyyy HH:mm:ss')..." -Color DarkOrange
+
+    # Display strategy collection details
+    Display-StrategyCollections -TextBox $statusBox -StrategyCollection $strategyCollection -SetupConfig $setupConfig
+
+    # Run the build
+    $buildSuccess = $true
+    try {
+        if ($strategyCollection.SkipDocker) {
+            Append-TextWithColor -TextBox $statusBox -Text "Basic mode: Checking for manually compiled files..." -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "Syncing compiled files to Dev, Test, Deploy, and Package environments..." -Color DarkBlue
+
+            $mt4DevPath = $strategyCollection.Config.MT4Paths.DevPath
+            $mt4TestPath = $strategyCollection.Config.MT4Paths.TestPath
+            $mt4DeployPath = $strategyCollection.Config.MT4Paths.DeployPath
+            $mt4PackagePath = $strategyCollection.Config.MT4Paths.PackagePath
+            $mt5DevPath = $strategyCollection.Config.MT5Paths.DevPath
+            $mt5TestPath = $strategyCollection.Config.MT5Paths.TestPath
+            $mt5DeployPath = $strategyCollection.Config.MT5Paths.DeployPath
+            $mt5PackagePath = $strategyCollection.Config.MT5Paths.PackagePath
+            $mt4Path = $strategyCollection.Config.MT4RootPath
+            $mt5Path = $strategyCollection.Config.MT5RootPath
+
+            Append-TextWithColor -TextBox $statusBox -Text "MT4 DevPath: $mt4DevPath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT4 TestPath: $mt4TestPath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT4 DeployPath: $mt4DeployPath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT4 PackagePath: $mt4PackagePath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT5 DevPath: $mt5DevPath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT5 TestPath: $mt5TestPath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT5 DeployPath: $mt5DeployPath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT5 PackagePath: $mt5PackagePath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT4Path: $mt4Path" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT5Path: $mt5Path" -Color DarkBlue
+
+            # Validate paths
+            $paths = @($mt4DevPath, $mt4TestPath, $mt4DeployPath, $mt4PackagePath, $mt5DevPath, $mt5TestPath, $mt5DeployPath, $mt5PackagePath, $mt4Path, $mt5Path)
+            foreach ($path in $paths) {
+                if (-not $path) {
+                    throw "One or more configuration paths are missing."
+                }
+            }
+
+            # Call Sync-CompiledFiles from MTSetup.ps1
+            $syncScript = Join-Path -Path $PSScriptRoot -ChildPath "MTSetup.ps1"
+            try {
+                . $syncScript
+                Sync-CompiledFiles -MT4DevPath $mt4DevPath `
+                                  -MT4TestPath $mt4TestPath `
+                                  -MT4DeployPath $mt4DeployPath `
+                                  -MT4PackagePath $mt4PackagePath `
+                                  -MT5DevPath $mt5DevPath `
+                                  -MT5TestPath $mt5TestPath `
+                                  -MT5DeployPath $mt5DeployPath `
+                                  -MT5PackagePath $mt5PackagePath `
+                                  -MT4Path $mt4Path `
+                                  -MT5Path $mt5Path `
+                                  -CollectionName $collectionName `
+                                  -StrategyName $strategyName
+                Append-TextWithColor -TextBox $statusBox -Text "Files synced to all environments." -Color Green
+            } catch {
+                $buildSuccess = $false
+                Append-TextWithColor -TextBox $statusBox -Text "Sync failed: $($_.Exception.Message)" -Color Red
+            }
+        } else {
+            Append-TextWithColor -TextBox $statusBox -Text "Advanced mode: Building with Docker..." -Color DarkBlue
+            $setupScript = Join-Path -Path $PSScriptRoot -ChildPath "MTSetup.ps1"
+            try {
+                . $setupScript
+                Setup-Docker -Installations $strategyCollection.Installations -StrategyName $strategyName
+            } catch {
+                $buildSuccess = $false
+                Append-TextWithColor -TextBox $statusBox -Text "Docker build failed: $($_.Exception.Message)" -Color Red
+            }
+        }
+    } catch {
+        $buildSuccess = $false
+        Append-TextWithColor -TextBox $statusBox -Text "Build failed: $($_.Exception.Message)" -Color Red
+    }
+
+    # Display build status with color
+    if ($buildSuccess) {
+        Append-TextWithColor -TextBox $statusBox -Text "Build cycle completed successfully." -Color Green
+    } else {
+        Append-TextWithColor -TextBox $statusBox -Text "Build cycle failed." -Color Red
+    }
+
+    # Reset the countdown and restart the countdown timer
+    $script:secondsRemaining = $script:buildInterval
+    $countdownBox.Text = "Next build in $($script:secondsRemaining)s..."
+    Write-Host "Reset countdownBox: Next build in $($script:secondsRemaining)s..."
+    $countdownTimer.Start()
 })
 
-if ($configs.Count -gt 0) { 
-    $modeLabel.Text = if ($configs[0].SkipDocker) { "Mode: Basic (Manual Builds)" } else { "Mode: Advanced (Docker Builds)" }
-}
+# Main build timer tick event
+$timer.Add_Tick({
+    if (-not $script:isRunning) {
+        $timer.Stop()
+        return
+    }
 
-$form.ShowDialog()
+    $selected = $dropdown.SelectedItem
+    if (-not $selected) {
+        Append-TextWithColor -TextBox $statusBox -Text "Please select a strategy collection to build." -Color Red
+        return
+    }
+
+    $collectionName, $strategyName = $selected.Split('-')
+    $strategyCollection = $buildConfig.StrategyCollections | Where-Object { $_.CollectionName -eq $collectionName -and $_.StrategyName -eq $strategyName }
+    if (-not $strategyCollection) {
+        Append-TextWithColor -TextBox $statusBox -Text "Configuration for $selected not found in build.json." -Color Red
+        return
+    }
+
+    # Stop the countdown timer during the build
+    $countdownTimer.Stop()
+    $countdownBox.Text = ""
+    Write-Host "Build started, cleared countdownBox"
+    Append-TextWithColor -TextBox $statusBox -Text "Running build for $selected at $(Get-Date -Format 'MM/dd/yyyy HH:mm:ss')..." -Color DarkOrange
+
+    # Display strategy collection details
+    Display-StrategyCollections -TextBox $statusBox -StrategyCollection $strategyCollection -SetupConfig $setupConfig
+
+    # Run the build
+    $buildSuccess = $true
+    try {
+        if ($strategyCollection.SkipDocker) {
+            Append-TextWithColor -TextBox $statusBox -Text "Basic mode: Checking for manually compiled files..." -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "Syncing compiled files to Dev, Test, Deploy, and Package environments..." -Color DarkBlue
+
+            $mt4DevPath = $strategyCollection.Config.MT4Paths.DevPath
+            $mt4TestPath = $strategyCollection.Config.MT4Paths.TestPath
+            $mt4DeployPath = $strategyCollection.Config.MT4Paths.DeployPath
+            $mt4PackagePath = $strategyCollection.Config.MT4Paths.PackagePath
+            $mt5DevPath = $strategyCollection.Config.MT5Paths.DevPath
+            $mt5TestPath = $strategyCollection.Config.MT5Paths.TestPath
+            $mt5DeployPath = $strategyCollection.Config.MT5Paths.DeployPath
+            $mt5PackagePath = $strategyCollection.Config.MT5Paths.PackagePath
+            $mt4Path = $strategyCollection.Config.MT4RootPath
+            $mt5Path = $strategyCollection.Config.MT5RootPath
+
+            Append-TextWithColor -TextBox $statusBox -Text "MT4 DevPath: $mt4DevPath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT4 TestPath: $mt4TestPath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT4 DeployPath: $mt4DeployPath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT4 PackagePath: $mt4PackagePath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT5 DevPath: $mt5DevPath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT5 TestPath: $mt5TestPath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT5 DeployPath: $mt5DeployPath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT5 PackagePath: $mt5PackagePath" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT4Path: $mt4Path" -Color DarkBlue
+            Append-TextWithColor -TextBox $statusBox -Text "MT5Path: $mt5Path" -Color DarkBlue
+
+            # Call Sync-CompiledFiles from MTSetup.ps1
+            $syncScript = Join-Path -Path $PSScriptRoot -ChildPath "MTSetup.ps1"
+            . $syncScript
+            Sync-CompiledFiles -MT4DevPath $mt4DevPath -MT4TestPath $mt4TestPath -MT4DeployPath $mt4DeployPath -MT4PackagePath $mt4PackagePath -MT5DevPath $mt5DevPath -MT5TestPath $mt5TestPath -MT5DeployPath $mt5DeployPath -MT5PackagePath $mt5PackagePath -MT4Path $mt4Path -MT5Path $mt5Path -CollectionName $collectionName -StrategyName $strategyName
+
+            Append-TextWithColor -TextBox $statusBox -Text "Files synced to all environments." -Color Green
+        } else {
+            Append-TextWithColor -TextBox $statusBox -Text "Advanced mode: Building with Docker..." -Color DarkBlue
+            # Call Setup-Docker from MTSetup.ps1
+            $setupScript = Join-Path -Path $PSScriptRoot -ChildPath "MTSetup.ps1"
+            . $setupScript
+            Setup-Docker -Installations $strategyCollection.Installations -StrategyName $strategyName
+        }
+    } catch {
+        $buildSuccess = $false
+        Append-TextWithColor -TextBox $statusBox -Text "Build failed: $_" -Color Red
+    }
+
+    # Display build status with color
+    if ($buildSuccess) {
+        Append-TextWithColor -TextBox $statusBox -Text "Build cycle completed successfully." -Color Green
+    } else {
+        Append-TextWithColor -TextBox $statusBox -Text "Build cycle failed." -Color Red
+    }
+
+    # Reset the countdown and restart the countdown timer
+    $script:secondsRemaining = $script:buildInterval
+    $countdownBox.Text = "Next build in $($script:secondsRemaining)s..."
+    Write-Host "Reset countdownBox: Next build in $($script:secondsRemaining)s..."
+    $countdownTimer.Start()
+})
+
+# Start Build button click event
+$startButton.Add_Click({
+    $script:isRunning = $true
+    $startButton.Enabled = $false
+    $stopButton.Enabled = $true
+    $script:secondsRemaining = $script:buildInterval
+    Append-TextWithColor -TextBox $statusBox -Text "Build process started." -Color Green
+    $countdownBox.Text = "Next build in $($script:secondsRemaining)s..."
+    Write-Host "Started countdownBox: Next build in $($script:secondsRemaining)s..."
+    $timer.Start()
+    $countdownTimer.Start()
+})
+
+# Stop Build button click event
+$stopButton.Add_Click({
+    $script:isRunning = $false
+    $timer.Stop()
+    $countdownTimer.Stop()
+    $startButton.Enabled = $true
+    $stopButton.Enabled = $false
+    $countdownBox.Text = ""
+    Write-Host "Cleared countdownBox"
+    Append-TextWithColor -TextBox $statusBox -Text "Build process stopped." -Color DarkOrange
+})
+
+# Set up form closing event to ensure timers are stopped
+$form.Add_FormClosing({
+    $timer.Stop()
+    $countdownTimer.Stop()
+})
+
+# Show the form
+$form.Add_Shown({$form.Activate()})
+[void]$form.ShowDialog()
